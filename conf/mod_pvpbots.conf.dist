@@ -91,208 +91,219 @@ PvpBots.EnableHeirloomCcTrinket = 1
 ###############################################################################
 # PvP Specs
 #
-# Each class has up to 3 PvP specs numbered 1, 2, 3.
+# Each class has up to 3 PvP specs numbered 0, 1, 2 (0-indexed, matching the
+# three talent trees: tree 0, tree 1, tree 2).
 # One is chosen at random when a bot logs in.
 # The highest-level link that does not exceed the bot's level is used.
 #
-# PvpBots.SpecName.<class>.<specNo>         = display name
-# PvpBots.SpecLink.<class>.<specNo>.<level> = wowhead-style talent link
-# PvpBots.SpecGlyph.<class>.<specNo>        = major1,minor1,major2,minor2,minor3,major3
+# PvpBots.SpecName.<class>.<tab>         = display name
+# PvpBots.SpecLink.<class>.<tab>.<level> = wowhead-style talent link
+# PvpBots.SpecGlyph.<class>.<tab>        = glyph item IDs, 6 entries in slot order:
+#                                          major0, major1, minor0, major2, minor1, minor2
 #
-# Specs are contiguous — a missing SpecName.X.1 means no specs for class X.
-# Talent links are taken directly from the playerbots premade spec list,
-# re-numbered so that 1 = first PvP spec, 2 = second, 3 = third.
+# Specs are contiguous — a missing SpecName.X.0 means no specs for class X.
+# Tab numbering mirrors the three talent trees (0 = first tree, 1 = second, 2 = third).
 ###############################################################################
 
 ####################################################################################################
 # WARRIOR (class 1)
+# Tab 0 = Arms  |  Tab 1 = Fury  |  Tab 2 = Protection
 ####################################################################################################
 
-PvpBots.SpecName.1.1  = Arms
-PvpBots.SpecGlyph.1.1 = 43417,43397,43423,43396,49084,43421
-PvpBots.SpecLink.1.1.60 = 0320232023331100032212012221251
-PvpBots.SpecLink.1.1.80 = 0320332023335100232212013231251-3250001
+PvpBots.SpecName.1.0  = Arms
+PvpBots.SpecGlyph.1.0 = 43417,43397,43423,43396,49084,43421
+PvpBots.SpecLink.1.0.60 = 0320232023331100032212012221251
+PvpBots.SpecLink.1.0.80 = 0320332023335100232212013231251-3250001
 
-PvpBots.SpecName.1.2  = Fury
-PvpBots.SpecGlyph.1.2 = 43432,43397,43417,43395,43396,43418
-PvpBots.SpecLink.1.2.60 = -325000131500212250120511351
-PvpBots.SpecLink.1.2.80 = 03220300233-325000131500212250122511351
+PvpBots.SpecName.1.1  = Fury
+PvpBots.SpecGlyph.1.1 = 43432,43397,43417,43395,43396,43418
+PvpBots.SpecLink.1.1.60 = -325000131500212250120511351
+PvpBots.SpecLink.1.1.80 = 03220300233-325000131500212250122511351
 
-PvpBots.SpecName.1.3  = Prot
-PvpBots.SpecGlyph.1.3 = 43425,43397,43415,43396,49084,45792
-PvpBots.SpecLink.1.3.60 = --250031220223012520332113321
-PvpBots.SpecLink.1.3.80 = 0502300123-3-250031220223012521332113321
+PvpBots.SpecName.1.2  = Protection
+PvpBots.SpecGlyph.1.2 = 43425,43397,43415,43396,49084,45792
+PvpBots.SpecLink.1.2.60 = --250031220223012520332113321
+PvpBots.SpecLink.1.2.80 = 0502300123-3-250031220223012521332113321
 
 ####################################################################################################
 # PALADIN (class 2)
+# Tab 0 = Holy  |  Tab 1 = Protection  |  Tab 2 = Retribution
 ####################################################################################################
 
-PvpBots.SpecName.2.1  = Holy
-PvpBots.SpecGlyph.2.1 = 41110,43367,45746,43366,43365,45747
-PvpBots.SpecLink.2.1.60 = 50332150300013050133215221
-PvpBots.SpecLink.2.1.80 = 50332150300013050133315221-5032013122
+PvpBots.SpecName.2.0  = Holy
+PvpBots.SpecGlyph.2.0 = 41110,43367,45746,43366,43365,45747
+PvpBots.SpecLink.2.0.60 = 50332150300013050133215221
+PvpBots.SpecLink.2.0.80 = 50332150300013050133315221-5032013122
 
-PvpBots.SpecName.2.2  = Prot
-PvpBots.SpecGlyph.2.2 = 41092,43369,41101,43368,43365,45745
-PvpBots.SpecLink.2.2.60 = -15320130223122311323311321
-PvpBots.SpecLink.2.2.80 = -15320130223122321333312321-052300502
+PvpBots.SpecName.2.1  = Protection
+PvpBots.SpecGlyph.2.1 = 41092,43369,41101,43368,43365,45745
+PvpBots.SpecLink.2.1.60 = -15320130223122311323311321
+PvpBots.SpecLink.2.1.80 = -15320130223122321333312321-052300502
 
-PvpBots.SpecName.2.3  = Ret
-PvpBots.SpecGlyph.2.3 = 41095,43369,41102,43368,43365,45747
-PvpBots.SpecLink.2.3.60 = --05230250203331222133201321
-PvpBots.SpecLink.2.3.80 = -1532013022-05230250203331322133201321
+PvpBots.SpecName.2.2  = Retribution
+PvpBots.SpecGlyph.2.2 = 41095,43369,41102,43368,43365,45747
+PvpBots.SpecLink.2.2.60 = --05230250203331222133201321
+PvpBots.SpecLink.2.2.80 = -1532013022-05230250203331322133201321
 
 ####################################################################################################
 # HUNTER (class 3)
+# Tab 0 = Beast Mastery  |  Tab 1 = Marksmanship  |  Tab 2 = Survival
 ####################################################################################################
 
-PvpBots.SpecName.3.1  = BM
-PvpBots.SpecGlyph.3.1 = 42897,42900,42902,43356,43338,42900
-PvpBots.SpecLink.3.1.60 = 05203201505012233100531151
-PvpBots.SpecLink.3.1.80 = 05203201505012233100531351-005305101-03
+PvpBots.SpecName.3.0  = Beast Mastery
+PvpBots.SpecGlyph.3.0 = 42897,42900,42902,43356,43338,42900
+PvpBots.SpecLink.3.0.60 = 05203201505012233100531151
+PvpBots.SpecLink.3.0.80 = 05203201505012233100531351-005305101-03
 
-PvpBots.SpecName.3.2  = MM
-PvpBots.SpecGlyph.3.2 = 42912,43351,42897,43338,43356,42904
-PvpBots.SpecLink.3.2.60 = -034305101030213231135031051
-PvpBots.SpecLink.3.2.80 = -035305101030213233135031051-53013020102
+PvpBots.SpecName.3.1  = Marksmanship
+PvpBots.SpecGlyph.3.1 = 42912,43351,42897,43338,43356,42904
+PvpBots.SpecLink.3.1.60 = -034305101030213231135031051
+PvpBots.SpecLink.3.1.80 = -035305101030213233135031051-53013020102
 
-PvpBots.SpecName.3.3  = Survival
-PvpBots.SpecGlyph.3.3 = 42912,43350,42904,43356,43338,45731
-PvpBots.SpecLink.3.3.60 = --2300302410233030533135001031
-PvpBots.SpecLink.3.3.80 = -005305201-2300302510233330533135001031
+PvpBots.SpecName.3.2  = Survival
+PvpBots.SpecGlyph.3.2 = 42912,43350,42904,43356,43338,45731
+PvpBots.SpecLink.3.2.60 = --2300302410233030533135001031
+PvpBots.SpecLink.3.2.80 = -005305201-2300302510233330533135001031
 
 ####################################################################################################
 # ROGUE (class 4)
+# Tab 0 = Assassination  |  Tab 1 = Combat  |  Tab 2 = Subtlety
 ####################################################################################################
 
-PvpBots.SpecName.4.1  = Assassination
-PvpBots.SpecGlyph.4.1 = 42974,43380,45768,43379,43376,42971
-PvpBots.SpecLink.4.1.60 = 005303103342102522103031--50002
-PvpBots.SpecLink.4.1.80 = 005303103342102522103031-004-532023203000012
+PvpBots.SpecName.4.0  = Assassination
+PvpBots.SpecGlyph.4.0 = 42974,43380,45768,43379,43376,42971
+PvpBots.SpecLink.4.0.60 = 005303103342102522103031--50002
+PvpBots.SpecLink.4.0.80 = 005303103342102522103031-004-532023203000012
 
-PvpBots.SpecName.4.2  = Combat
-PvpBots.SpecGlyph.4.2 = 42972,43380,45762,43376,43378,42971
-PvpBots.SpecLink.4.2.60 = -3250002050225010223102321251
-PvpBots.SpecLink.4.2.80 = 305120105-3250002050235010223102521251
+PvpBots.SpecName.4.1  = Combat
+PvpBots.SpecGlyph.4.1 = 42972,43380,45762,43376,43378,42971
+PvpBots.SpecLink.4.1.60 = -3250002050225010223102321251
+PvpBots.SpecLink.4.1.80 = 305120105-3250002050235010223102521251
 
-PvpBots.SpecName.4.3  = Subtlety
-PvpBots.SpecGlyph.4.3 = 42968,43376,45764,43380,43379,42971
-PvpBots.SpecLink.4.3.60 = --5120212030320121330133221251
-PvpBots.SpecLink.4.3.80 = 3023031-3-5120212030320121350135231251
+PvpBots.SpecName.4.2  = Subtlety
+PvpBots.SpecGlyph.4.2 = 42968,43376,45764,43380,43379,42971
+PvpBots.SpecLink.4.2.60 = --5120212030320121330133221251
+PvpBots.SpecLink.4.2.80 = 3023031-3-5120212030320121350135231251
 
 ####################################################################################################
 # PRIEST (class 5)
+# Tab 0 = Discipline  |  Tab 1 = Holy  |  Tab 2 = Shadow
 ####################################################################################################
 
-PvpBots.SpecName.5.1  = Disc
-PvpBots.SpecGlyph.5.1 = 42408,43371,45760,43370,43374,45756
-PvpBots.SpecLink.5.1.60 = 5003203130320512201323031051
-PvpBots.SpecLink.5.1.80 = 5003203130322512331013231151-23050113
+PvpBots.SpecName.5.0  = Discipline
+PvpBots.SpecGlyph.5.0 = 42408,43371,45760,43370,43374,45756
+PvpBots.SpecLink.5.0.60 = 5003203130320512201323031051
+PvpBots.SpecLink.5.0.80 = 5003203130322512331013231151-23050113
 
-PvpBots.SpecName.5.2  = Holy
-PvpBots.SpecGlyph.5.2 = 42411,43371,42408,43370,43374,45755
-PvpBots.SpecLink.5.2.60 = -235501031000152430320031151
-PvpBots.SpecLink.5.2.80 = 500320313-235501031000152530320031351
+PvpBots.SpecName.5.1  = Holy
+PvpBots.SpecGlyph.5.1 = 42411,43371,42408,43370,43374,45755
+PvpBots.SpecLink.5.1.60 = -235501031000152430320031151
+PvpBots.SpecLink.5.1.80 = 500320313-235501031000152530320031351
 
-PvpBots.SpecName.5.3  = Shadow
-PvpBots.SpecGlyph.5.3 = 42407,43371,45753,43370,43374,42408
-PvpBots.SpecLink.5.3.60 = --005323241223112003102311351
-PvpBots.SpecLink.5.3.80 = 50332031003--005323241223112003102311351
+PvpBots.SpecName.5.2  = Shadow
+PvpBots.SpecGlyph.5.2 = 42407,43371,45753,43370,43374,42408
+PvpBots.SpecLink.5.2.60 = --005323241223112003102311351
+PvpBots.SpecLink.5.2.80 = 50332031003--005323241223112003102311351
 
 ####################################################################################################
 # DEATH KNIGHT (class 6)
+# Tab 0 = Blood  |  Tab 1 = Frost  |  Tab 2 = Unholy
 ####################################################################################################
 
-PvpBots.SpecName.6.1  = Blood
-PvpBots.SpecGlyph.6.1 = 43534,43535,45799,43673,43672,45805
-PvpBots.SpecLink.6.1.60 = 2305021503003313201222101351
-PvpBots.SpecLink.6.1.80 = 2305021503003313201222101351--032232300023
+PvpBots.SpecName.6.0  = Blood
+PvpBots.SpecGlyph.6.0 = 43534,43535,45799,43673,43672,45805
+PvpBots.SpecLink.6.0.60 = 2305021503003313201222101351
+PvpBots.SpecLink.6.0.80 = 2305021503003313201222101351--032232300023
 
-PvpBots.SpecName.6.2  = Frost
-PvpBots.SpecGlyph.6.2 = 43543,43539,45800,43673,43672,45806
-PvpBots.SpecLink.6.2.60 = -32015351022203012001233101251
-PvpBots.SpecLink.6.2.80 = 0055-32015351052203012001233131351-03
+PvpBots.SpecName.6.1  = Frost
+PvpBots.SpecGlyph.6.1 = 43543,43539,45800,43673,43672,45806
+PvpBots.SpecLink.6.1.60 = -32015351022203012001233101251
+PvpBots.SpecLink.6.1.80 = 0055-32015351052203012001233131351-03
 
-PvpBots.SpecName.6.3  = Unholy
-PvpBots.SpecGlyph.6.3 = 45804,43539,43549,43673,43672,45805
-PvpBots.SpecLink.6.3.60 = --2301323301002152230101203103151
-PvpBots.SpecLink.6.3.80 = -320050410002-2301323301002152230101203133151
+PvpBots.SpecName.6.2  = Unholy
+PvpBots.SpecGlyph.6.2 = 45804,43539,43549,43673,43672,45805
+PvpBots.SpecLink.6.2.60 = --2301323301002152230101203103151
+PvpBots.SpecLink.6.2.80 = -320050410002-2301323301002152230101203133151
 
 ####################################################################################################
 # SHAMAN (class 7)
+# Tab 0 = Elemental  |  Tab 1 = Enhancement  |  Tab 2 = Restoration
 ####################################################################################################
 
-PvpBots.SpecName.7.1  = Elemental
-PvpBots.SpecGlyph.7.1 = 45778,43388,45770,43725,43386,41524
-PvpBots.SpecLink.7.1.60 = 0533001503213051322301341
-PvpBots.SpecLink.7.1.80 = 0533051503213051322331351-023212001
+PvpBots.SpecName.7.0  = Elemental
+PvpBots.SpecGlyph.7.0 = 45778,43388,45770,43725,43386,41524
+PvpBots.SpecLink.7.0.60 = 0533001503213051322301341
+PvpBots.SpecLink.7.0.80 = 0533051503213051322331351-023212001
 
-PvpBots.SpecName.7.2  = Enhancement
-PvpBots.SpecGlyph.7.2 = 45778,43388,41526,43725,43344,45771
-PvpBots.SpecLink.7.2.60 = -02305203105001333201131131151
-PvpBots.SpecLink.7.2.80 = 0503351-02305203105001333211131231251
+PvpBots.SpecName.7.1  = Enhancement
+PvpBots.SpecGlyph.7.1 = 45778,43388,41526,43725,43344,45771
+PvpBots.SpecLink.7.1.60 = -02305203105001333201131131151
+PvpBots.SpecLink.7.1.80 = 0503351-02305203105001333211131231251
 
-PvpBots.SpecName.7.3  = Resto
-PvpBots.SpecGlyph.7.3 = 45778,43388,45775,43725,43344,41535
-PvpBots.SpecLink.7.3.60 = --05032331331013501120321251
-PvpBots.SpecLink.7.3.80 = -023222301004-05032331331013501120331251
+PvpBots.SpecName.7.2  = Restoration
+PvpBots.SpecGlyph.7.2 = 45778,43388,45775,43725,43344,41535
+PvpBots.SpecLink.7.2.60 = --05032331331013501120321251
+PvpBots.SpecLink.7.2.80 = -023222301004-05032331331013501120331251
 
 ####################################################################################################
 # MAGE (class 8)
+# Tab 0 = Arcane  |  Tab 1 = Fire  |  Tab 2 = Frost
 ####################################################################################################
 
-PvpBots.SpecName.8.1  = Arcane
-PvpBots.SpecGlyph.8.1 = 42735,43364,42738,43360,43357,42752
-PvpBots.SpecLink.8.1.60 = 205323200122032103303102015221
-PvpBots.SpecLink.8.1.80 = 205323200122032103303102015321-23002-303020301
+PvpBots.SpecName.8.0  = Arcane
+PvpBots.SpecGlyph.8.0 = 42735,43364,42738,43360,43357,42752
+PvpBots.SpecLink.8.0.60 = 205323200122032103303102015221
+PvpBots.SpecLink.8.0.80 = 205323200122032103303102015321-23002-303020301
 
-PvpBots.SpecName.8.2  = Fire
-PvpBots.SpecGlyph.8.2 = 42738,43364,42752,43360,43357,45737
-PvpBots.SpecLink.8.2.60 = -2305202312020031223122301351
-PvpBots.SpecLink.8.2.80 = 230321030122-2305212312020031223122301351
+PvpBots.SpecName.8.1  = Fire
+PvpBots.SpecGlyph.8.1 = 42738,43364,42752,43360,43357,45737
+PvpBots.SpecLink.8.1.60 = -2305202312020031223122301351
+PvpBots.SpecLink.8.1.80 = 230321030122-2305212312020031223122301351
 
-PvpBots.SpecName.8.3  = Frost
-PvpBots.SpecGlyph.8.3 = 42738,43364,45740,43357,43360,42752
-PvpBots.SpecLink.8.3.60 = --3533203210203100232102231151
-PvpBots.SpecLink.8.3.80 = 23032103010203--3533203210203100232102231151
+PvpBots.SpecName.8.2  = Frost
+PvpBots.SpecGlyph.8.2 = 42738,43364,45740,43357,43360,42752
+PvpBots.SpecLink.8.2.60 = --3533203210203100232102231151
+PvpBots.SpecLink.8.2.80 = 23032103010203--3533203210203100232102231151
 
 ####################################################################################################
 # WARLOCK (class 9)
+# Tab 0 = Affliction  |  Tab 1 = Demonology  |  Tab 2 = Destruction
 ####################################################################################################
 
-PvpBots.SpecName.9.1  = Affliction
-PvpBots.SpecGlyph.9.1 = 50077,43392,42455,43390,43389,45783
-PvpBots.SpecLink.9.1.60 = 0350002231223011053502301151
-PvpBots.SpecLink.9.1.80 = 2350002231223111053502301151-2032003011302
+PvpBots.SpecName.9.0  = Affliction
+PvpBots.SpecGlyph.9.0 = 50077,43392,42455,43390,43389,45783
+PvpBots.SpecLink.9.0.60 = 0350002231223011053502301151
+PvpBots.SpecLink.9.0.80 = 2350002231223111053502301151-2032003011302
 
-PvpBots.SpecName.9.2  = Demonology
-PvpBots.SpecGlyph.9.2 = 42459,43392,45780,43390,43389,45783
-PvpBots.SpecLink.9.2.60 = -003203301135202530135001251
-PvpBots.SpecLink.9.2.80 = -003203301135202530135011351-052300152
+PvpBots.SpecName.9.1  = Demonology
+PvpBots.SpecGlyph.9.1 = 42459,43392,45780,43390,43389,45783
+PvpBots.SpecLink.9.1.60 = -003203301135202530135001251
+PvpBots.SpecLink.9.1.80 = -003203301135202530135011351-052300152
 
-PvpBots.SpecName.9.3  = Destruction
-PvpBots.SpecGlyph.9.3 = 42471,43392,42454,43390,43389,45783
-PvpBots.SpecLink.9.3.60 = --05230015220331351005031051
-PvpBots.SpecLink.9.3.80 = -2032003311302-05230015220331351005031051
+PvpBots.SpecName.9.2  = Destruction
+PvpBots.SpecGlyph.9.2 = 42471,43392,42454,43390,43389,45783
+PvpBots.SpecLink.9.2.60 = --05230015220331351005031051
+PvpBots.SpecLink.9.2.80 = -2032003311302-05230015220331351005031051
 
 ####################################################################################################
 # DRUID (class 11)
+# Tab 0 = Balance  |  Tab 1 = Feral  |  Tab 2 = Restoration
 ####################################################################################################
 
-PvpBots.SpecName.11.1  = Balance
-PvpBots.SpecGlyph.11.1 = 40921,43331,45622,43674,43335,45623
-PvpBots.SpecLink.11.1.60 = 5012203115331002213032311231
-PvpBots.SpecLink.11.1.80 = 5022203125331003213035311231--230033012
+PvpBots.SpecName.11.0  = Balance
+PvpBots.SpecGlyph.11.0 = 40921,43331,45622,43674,43335,45623
+PvpBots.SpecLink.11.0.60 = 5012203115331002213032311231
+PvpBots.SpecLink.11.0.80 = 5022203125331003213035311231--230033012
 
-PvpBots.SpecName.11.2  = Cat
-PvpBots.SpecGlyph.11.2 = 40902,43331,45601,43674,43335,40901
-PvpBots.SpecLink.11.2.60 = -513202032322010053103030310501
-PvpBots.SpecLink.11.2.80 = -523202032322010053103030310511-205503012
+PvpBots.SpecName.11.1  = Feral
+PvpBots.SpecGlyph.11.1 = 40902,43331,45601,43674,43335,40901
+PvpBots.SpecLink.11.1.60 = -513202032322010053103030310501
+PvpBots.SpecLink.11.1.80 = -523202032322010053103030310511-205503012
 
-PvpBots.SpecName.11.3  = Resto
-PvpBots.SpecGlyph.11.3 = 40913,43331,40906,43335,43674,45623
-PvpBots.SpecLink.11.3.60 = --230033312031500511350013051
-PvpBots.SpecLink.11.3.80 = 05320021--230033312031500531353013251
+PvpBots.SpecName.11.2  = Restoration
+PvpBots.SpecGlyph.11.2 = 40913,43331,40906,43335,43674,45623
+PvpBots.SpecLink.11.2.60 = --230033312031500511350013051
+PvpBots.SpecLink.11.2.80 = 05320021--230033312031500531353013251
 
 # If enabled, pvpbots will not log in until at least one real (non-bot) player
 # is online, and will log out after all real players have been offline for

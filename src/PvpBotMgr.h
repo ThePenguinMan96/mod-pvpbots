@@ -225,9 +225,24 @@ private:
     void EquipPvpGear(Player* bot);
     void EquipCcBreakTrinket(Player* bot);
 
-    // Fill any free talent points remaining after InitTalentsByParsedSpecLink
-    // by spending them in the primary spec tree, row by row.
-    void FillRemainingTalents(Player* bot, uint32 primaryTab);
+    // Full single-pass initialization for a pvpbot.
+    // Sets the PvP spec BEFORE calling InitEquipment/ApplyEnchantAndGemsNew/
+    // InitGlyphs so every spec-sensitive function runs once, correctly.
+    // Called from OnBotLoginInternal.
+    void InitPvpBot(Player* bot);
+
+    // Apply the glyphs defined in spec.glyphs to the bot.
+    // Reads directly from our config (PvpBots.SpecGlyph.<class>.<tab>),
+    // bypassing sPlayerbotAIConfig.parsedSpecGlyph entirely.
+    void InitPvpGlyphs(Player* bot, const PvpSpec& spec);
+
+    // Apply our PvP spec link, then distribute any leftover points into
+    // secondary and tertiary trees (same pattern as InitTalentsTree).
+    void InitPvpTalents(Player* bot, const std::vector<std::vector<uint32>>& parsedSpec, uint8 primaryTab);
+
+    // Spend all free talent points in the given tab, row by row.
+    // Used by InitPvpTalents for secondary/tertiary tree overflow.
+    void FillTalentTab(Player* bot, uint32 tab);
 
     static const char* GetRaceName(uint8 race);
     static const char* GetClassName(uint8 classId);

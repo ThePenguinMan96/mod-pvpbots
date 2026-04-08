@@ -35,65 +35,52 @@ data/sql/db-world/pvpbots_registry.sql — Bot account/char tracking table
 2. `GiveLevel(level)` + `SaveToDB()`
 3. Async `CharacterDatabase.Execute("DELETE FROM character_pet ...")` for non-pet classes — queued AFTER `SaveToDB`'s async writes so it fires last, preventing phantom pet rows
 
-### Bot login (`OnBotLoginInternal`)
+### Bot login (`OnBotLoginInternal` → `InitPvpBot`)
+
+`OnBotLoginInternal` is now a thin wrapper: sets `PLAYER_FLAGS_NO_XP_GAIN`, calls `InitPvpBot(bot)`, logs zone.
+
+`InitPvpBot` is a single-pass custom init that mirrors `Randomize(false)` but sets the PvP spec **before** the spec-sensitive functions run:
+
 ```
-factory.Randomize(false)                   // Full PvE init: gear, spells, enchants, gems, glyphs
-Pet cleanup (async Execute DELETE)         // Non-pet classes only; must be async not DirectExecute
-InitTalentsByParsedSpecLink(parsedSpec)    // Apply PvP spec from conf
-FillRemainingTalents(bot, primaryTab)      // Spend leftover points in primary tree
-factory.InitEquipment(false)              // Re-gear for PvP spec (Randomize used wrong spec)
-if (level >= 66) EquipPvpGear(bot)        // Replace with best resilience items (no weapons)
+Prepare (manual)                           // ResurrectPlayer, CombatStop
+factory.ClearEverything()                  // resetTalents, ClearSkills, ClearSpells, ClearInventory
+bot->GiveLevel(level) + InitStatsForLevel  // restore level after ClearEverything reset it
+InitInstanceQuests / InitAttunementQuests
+LearnDefaultSkills / InitSkills
+InitClassSpells / InitAvailableSpells      // pass 1 (pre-talent)
+
+// ── PvP spec applied HERE — before gear/enchants/glyphs ──
+InitTalentsByParsedSpecLink(parsedSpec)    // apply PvP spec from conf
+FillRemainingTalents(bot, primaryTab)      // spend leftover points
+botAI->ResetStrategies(false)             // fix strategy to match PvP talent tree
+
+InitAvailableSpells                        // pass 2 (talents unlock new spells)
+InitReputation / InitSpecialSpells / InitMounts
+factory.InitEquipment(false)              // correct spec weights on first pass
+InitBags / InitAmmo / InitFood / InitPotions / InitReagents / InitKeyring
+factory.ApplyEnchantAndGemsNew(true)      // destroyOld=true — correct spec on first pass
+InitConsumables
+factory.InitGlyphs()                      // PvP auras active — aura-based tab detection works
+
+if (level >= 66) EquipPvpGear(bot)        // resilience overlay (no weapons)
 else if (_enableCcBreakTrinket) EquipCcBreakTrinket(bot)
-factory.ApplyEnchantAndGemsNew(false)     // Re-enchant/gem new items
+
+Pet cleanup / InitPet / InitPetTalents
+SaveToDB
 ```
+
+**Key design decisions:**
+- `ClearAllItems()` (private) is skipped — `InitEquipment(false)` replaces all equipment slots
+- `CancelAuras()` (private) is skipped — not needed for fresh/re-logging bots
+- `InitGuild()` / `InitArenaTeam()` (private) are skipped — pvpbots don't need these
+- `ApplyEnchantAndGemsNew(true)` — `destroyOld=true` wipes and reapplies everything in one pass
+- `InitGlyphs()` runs once with correct PvP spec (no typeflags warning from double-call)
 
 ---
 
 ## Known Remaining Gear Issues and Why
 
-### 1. Feral Druid in caster gear / Enhancement Shaman in spellpower gear
-
-**Root cause:** `StatsWeightCalculator` reads the active **strategy** for type detection (SPELL_DMG, MELEE_DMG, etc.), not the talent tree. `Randomize()` set the strategy for a random PvE spec. Even though we apply the PvP spec and call `InitEquipment(false)`, the strategy is still from Randomize's random spec — so the type bucket is wrong.
-
-**Fix needed:** After `FillRemainingTalents`, call:
-```cpp
-if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
-    botAI->ResetStrategies(false);
-```
-`ResetStrategies(false)` calls `AiFactory::AddDefaultCombatStrategies()` which reads `GetPlayerSpecTab(player)` (talent tree). After PvP spec is applied, this recalculates the strategy correctly. Then `InitEquipment(false)` uses the right type bucket.
-
-`GET_PLAYERBOT_AI` is defined in `mod-playerbots/src/Script/Playerbots.h` (not `PlayerbotAI.h`). Add `#include "Playerbots.h"` when implementing.
-
-### 2. Glyphs assigned for wrong spec
-
-**Root cause:** `Randomize()` called `InitGlyphs()` for its random PvE spec. Our PvP spec is applied after, but `InitGlyphs()` is not re-called (currently blocked by a typeflags warning: "has glyph with typeflags 0 in slot with typeflags 1" if called twice).
-
-**Background:** The user's PR to `mod-playerbots` added aura-based PvP spec detection inside `InitGlyphs()` (tabs 3/4/5 are PvP-spec-only paths). `GetPlayerSpecTab()` only returns 0/1/2 — tabs 3-5 only exist inside `InitGlyphs()`'s self-contained aura detection. This fix correctly applies PvP glyphs when called after the PvP spec auras are active.
-
-**Fix needed:** Investigate the typeflags warning to determine if it's safe to call `InitGlyphs(false)` after `ResetStrategies`. If calling with `increment=false` clears existing glyphs first, the warning may not apply.
-
-### 3. Wrong-spec enchants from Randomize not wiped
-
-**Root cause:** `ApplyEnchantAndGemsNew(false)` (destroyOld=false) preserves existing enchants on all slots. Slots replaced by `EquipPvpGear` get fresh enchants; all other slots keep Randomize's wrong-spec enchants.
-
-**Fix needed:** Change to `ApplyEnchantAndGemsNew(true)` and move the call to AFTER `EquipPvpGear` so it wipes everything and re-applies correctly for the PvP spec. This is the final step.
-
----
-
-## Correct Initialization Order (Target State)
-
-```cpp
-factory.Randomize(false)
-// Pet cleanup (async Execute) for non-pet classes
-PlayerbotFactory::InitTalentsByParsedSpecLink(bot, parsedSpec, true)
-FillRemainingTalents(bot, primaryTab)
-// ADD: botAI->ResetStrategies(false)       — fixes strategy/type detection
-// ADD: factory.InitEquipment(false)         — re-gear with correct strategy
-// INVESTIGATE: factory.InitGlyphs(false)   — PvP glyphs (needs typeflags check)
-if (level >= 66) EquipPvpGear(bot)
-else if (_enableCcBreakTrinket) EquipCcBreakTrinket(bot)
-// CHANGE: factory.ApplyEnchantAndGemsNew(true) — wipe all, reapply for PvP spec
-```
+All three known gear issues (wrong-spec gear, wrong glyphs, wrong-spec enchants) are **resolved** by `InitPvpBot()`. The PvP spec is applied before `InitEquipment`, `InitGlyphs`, and `ApplyEnchantAndGemsNew(true)` — all run once with the correct spec.
 
 ---
 
@@ -102,7 +89,7 @@ else if (_enableCcBreakTrinket) EquipCcBreakTrinket(bot)
 - **Strategy vs. Tab:** Two separate things. `GetPlayerSpecTab(player)` always reads the talent tree directly (returns 0/1/2). Strategy is set by `ResetStrategies()` → `AddDefaultCombatStrategies()` which calls `GetPlayerSpecTab()` at that moment. `StatsWeightCalculator` reads strategy for type detection, not the talent tree.
 - **`InitEquipment(false)` incremental=false:** Gears all slots from scratch, not just empty ones.
 - **`ApplyEnchantAndGemsNew(bool destroyOld)`:** `true` = wipe all existing enchants/gems and reapply. `false` = only fill empty slots, preserve existing.
-- **Async vs DirectExecute:** `CharacterDatabase.Execute()` is queued. `DirectExecute()` bypasses the queue and runs immediately, BEFORE prior async writes. Always use async `Execute()` for the pet DELETE so it queues after Randomize's async INSERT.
+- **Async vs DirectExecute:** `CharacterDatabase.Execute()` is queued. `DirectExecute()` bypasses the queue and runs immediately, BEFORE prior async writes. Always use async `Execute()` for the pet DELETE so it queues after any prior async INSERTs (e.g. from `InitPet()` or `CreateRandomBot()`).
 - **`FillRemainingTalents` overflow risk:** A bot at level 79 using a 60-point link will have 7 leftover points. `FillRemainingTalents` distributes them in the primary tree row by row. Watch for edge cases where more points are available than a tree can absorb.
 
 ---

@@ -16,6 +16,7 @@
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "Log.h"
+#include "SpellMgr.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Pet.h"
@@ -28,11 +29,13 @@
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotFactory.h"
 #include "PlayerbotMgr.h"
+#include "Playerbots.h"             // GET_PLAYERBOT_AI
 #include "RandomPlayerbotFactory.h"
 #include "StatsWeightCalculator.h"
 
 #include <algorithm>
 #include <set>
+#include <sstream>
 #include <thread>
 #include <chrono>
 
@@ -206,29 +209,41 @@ void PvpBotMgr::OnBotLoginInternal(Player* bot)
         return;
 
     bot->SetPlayerFlag(PLAYER_FLAGS_NO_XP_GAIN);
+    InitPvpBot(bot);
 
+    std::string zoneName = "Unknown";
+    if (AreaTableEntry const* area = sAreaTableStore.LookupEntry(bot->GetZoneId()))
+        if (const char* name = area->area_name[sWorld->GetDefaultDbcLocale()])
+            zoneName = name;
+
+    LOG_INFO("playerbots",
+        "[mod-pvpbots] pvpbot '{}' | level {} {} | {}",
+        bot->GetName(), bot->GetLevel(),
+        GetClassName(bot->getClass()),
+        zoneName
+    );
+}
+
+
+void PvpBotMgr::InitPvpBot(Player* bot)
+{
     uint8 level   = bot->GetLevel();
     uint8 classId = bot->getClass();
 
-    // ── Spec selection ──────────────────────────────────────────────────
-    // Resolve the spec and parse the link now, but apply AFTER Randomize so
-    // that Randomize's internal InitTalents() call doesn't overwrite us.
     std::string specName = "Unknown";
     std::vector<std::vector<uint32>> parsedSpec;
+    uint32 primaryTab = 0;
+    const PvpSpec* selectedSpec = nullptr;
+
     auto it = _pvpSpecs.find(classId);
     if (it != _pvpSpecs.end() && !it->second.empty())
     {
-        const PvpSpec& spec =
-            it->second[urand(0, static_cast<uint32>(it->second.size()) - 1)];
-        specName = spec.name;
+        selectedSpec =
+            &it->second[urand(0, static_cast<uint32>(it->second.size()) - 1)];
+        specName = selectedSpec->name;
 
-        // Use the highest link whose level doesn't exceed the bot's level.
-        // Each breakpoint is hand-crafted so that its point count lands on
-        // the key capstone talent (e.g. Bladestorm at 51 pts for Arms).
-        // FillRemainingTalents() then spends any leftover points in the same
-        // primary tree so no talent points are ever wasted.
         std::string specLinkStr;
-        for (const auto& ll : spec.links)
+        for (const auto& ll : selectedSpec->links)
         {
             if (ll.level <= level)
                 specLinkStr = ll.link;
@@ -240,102 +255,199 @@ void PvpBotMgr::OnBotLoginInternal(Player* bot)
             parsedSpec = PlayerbotAIConfig::ParseTempTalentsOrder(classId, specLinkStr);
     }
 
-    // ── Gear + base init ─────────────────────────────────────────────────
-    // Randomize(false) handles gear, spells, enchants, gems, and glyphs for
-    // a PvE spec. We override talents and glyphs after.
-    PlayerbotFactory factory(bot, level, _gearQualityLimit, _gearScoreLimit);
-    factory.Randomize(false);
-
-    // Randomize() calls InitPet() internally, which can write a row to
-    // character_pet even for classes that cannot have persistent pets.
-    // On the next login, HandlePlayerLoginFromDB reads that row and logs:
-    //   "Unknown type pet X is summoned by player class Y"
-    //
-    // IMPORTANT: Randomize() uses async CharacterDatabase.Execute() for its
-    // character_pet INSERT.  We must use async Execute() here too — NOT
-    // DirectExecute — so our DELETE is placed in the same queue AFTER
-    // Randomize()'s INSERT.  DirectExecute bypasses the queue and would fire
-    // before the INSERT, leaving the row behind.
-    //
-    // Two-part cleanup:
-    //   1. Remove the pet object if it was actually spawned in-world.
-    //   2. Queue an async DELETE (after Randomize's async INSERT) so the row
-    //      is gone before the next time this bot loads from DB.
-    if (classId != CLASS_HUNTER && classId != CLASS_WARLOCK && classId != CLASS_DEATH_KNIGHT)
-    {
-        if (Pet* pet = bot->GetPet())
-            pet->Remove(PET_SAVE_AS_DELETED);
-
-        CharacterDatabase.Execute(
-            "DELETE FROM character_pet WHERE owner = {}",
-            bot->GetGUID().GetCounter()
-        );
-    }
-
-    // ── Apply PvP spec (after Randomize so it isn't overwritten) ────────
-    uint32 primaryTab = 0;
     if (!parsedSpec.empty())
     {
-        // Determine the primary spec tree (tab with the most invested ranks)
-        // before applying, so we know where to spend leftover points.
         uint32 tabPoints[3] = {0, 0, 0};
         for (const auto& entry : parsedSpec)
             if (entry.size() >= 4 && entry[0] < 3)
                 tabPoints[entry[0]] += entry[3];
         if (tabPoints[1] > tabPoints[0]) primaryTab = 1;
         if (tabPoints[2] > tabPoints[primaryTab]) primaryTab = 2;
-
-        PlayerbotFactory::InitTalentsByParsedSpecLink(bot, parsedSpec, true);
-
-        // Spend any remaining free points in the primary tree so that a
-        // level 75 bot using the .60 link doesn't sit with 15 unspent points.
-        if (bot->GetFreeTalentPoints() > 0)
-            FillRemainingTalents(bot, primaryTab);
-
-        // Note: InitGlyphs() is NOT re-called here. Randomize() already ran it
-        // once for the PvE spec. Calling it a second time with the PvP spec can
-        // write typeflags=0 glyphs into major slots, producing a core warning on
-        // the next login ("has glyph with typeflags 0 in slot with typeflags 1").
     }
 
-    // ── Re-gear for PvP spec ─────────────────────────────────────────────
-    // Randomize() geared the bot for whichever spec it randomly chose.
-    // Now that the PvP spec has been applied we call InitEquipment() again so
-    // playerbots re-gears using the correct spec weights, CanEquipWeapon(),
-    // CalculateItemTypePenalty(), and the full item pool.  This fixes:
-    //   • Feral druids in caster gear (Randomize chose Balance)
-    //   • Arms warriors with 1H + shield (wrong spec → wrong weapon type)
-    //   • Any other spec/gear mismatch from Randomize()
-    factory.InitEquipment(false);
+    PlayerbotFactory factory(bot, level, _gearQualityLimit, _gearScoreLimit);
 
-    // ── PvP gear override ────────────────────────────────────────────────
-    // Level 66+: replace armor/accessory slots with best resilience items.
-    // Weapons are intentionally NOT replaced here — InitEquipment() already
-    // chose spec-correct weapons and our resilience bonus would distort
-    // CalculateItemTypePenalty() (e.g. a high-resilience 1H outscoring a 2H
-    // for an Arms Warrior).
-    // Below 66: keep InitEquipment()'s gear; optionally add the CC-break trinket.
+    if (bot->isDead())
+        bot->ResurrectPlayer(1.0f, false);
+    bot->CombatStop(true);
+
+    factory.ClearEverything();
+    CharacterDatabase.Execute(
+        "DELETE FROM character_spell WHERE guid = {}",
+        bot->GetGUID().GetCounter()
+    );
+
+    bot->GiveLevel(level);      
+    bot->InitStatsForLevel(true);
+    bot->RemoveAllSpellCooldown();
+    factory.UnbindInstance();
+    factory.InitInstanceQuests();
+    factory.InitAttunementQuests();
+    bot->LearnDefaultSkills();
+    factory.InitSkills();
+    factory.InitClassSpells();
+    factory.InitAvailableSpells();
+
+    if (!parsedSpec.empty())
+        InitPvpTalents(bot, parsedSpec, primaryTab);
+
+    PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+    if (botAI)
+        botAI->ResetStrategies(false);
+
+    factory.InitAvailableSpells();
+    factory.InitReputation();
+    factory.InitSpecialSpells();
+    factory.InitMounts();
+    factory.InitEquipment(false);
+    factory.InitBags();
+    factory.InitAmmo();
+    factory.InitFood();
+    factory.InitPotions();
+    factory.InitReagents();
+    factory.InitKeyring();
+    factory.InitConsumables();
+
+    if (selectedSpec)
+        InitPvpGlyphs(bot, *selectedSpec);
+
     if (level >= 66)
         EquipPvpGear(bot);
     else if (_enableCcBreakTrinket)
         EquipCcBreakTrinket(bot);
-    factory.ApplyEnchantAndGemsNew(false);
 
-    // ── Location ────────────────────────────────────────────────────────
-    std::string zoneName = "Unknown";
-    if (AreaTableEntry const* area = sAreaTableStore.LookupEntry(bot->GetZoneId()))
-        if (const char* name = area->area_name[sWorld->GetDefaultDbcLocale()])
-            zoneName = name;
+    if (level >= sPlayerbotAIConfig.minEnchantingBotLevel)
+        factory.ApplyEnchantAndGemsNew(true);
 
-    // ── Log ─────────────────────────────────────────────────────────────
-    LOG_INFO("playerbots",
-        "[mod-pvpbots] pvpbot '{}' | level {} {} {} {} | {}",
-        bot->GetName(), level,
-        GetRaceName(bot->getRace()),
-        specName,
-        GetClassName(classId),
-        zoneName
-    );
+    if (classId != CLASS_HUNTER && classId != CLASS_WARLOCK && classId != CLASS_DEATH_KNIGHT)
+    {
+        if (Pet* pet = bot->GetPet())
+            pet->Remove(PET_SAVE_AS_DELETED);
+        CharacterDatabase.Execute(
+            "DELETE FROM character_pet WHERE owner = {}",
+            bot->GetGUID().GetCounter()
+        );
+    }
+    else if (level >= 10)
+    {
+        bot->RemovePet(nullptr, PET_SAVE_AS_CURRENT, true);
+        bot->RemovePet(nullptr, PET_SAVE_NOT_IN_SLOT, true);
+        factory.InitPet();
+        factory.InitPetTalents();
+    }
+
+    bot->SetMoney(urand(level * 100000, level * 5 * 100000));
+    bot->SetHealth(bot->GetMaxHealth());
+    bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
+    bot->SaveToDB(false, false);
+
+    DebugLog("InitPvpBot complete: " + bot->GetName() + " [" + specName + "]");
+}
+
+
+void PvpBotMgr::InitPvpGlyphs(Player* bot, const PvpSpec& spec)
+{
+    bot->InitGlyphsForLevel();
+
+    for (uint32 slotIndex = 0; slotIndex < MAX_GLYPH_SLOT_INDEX; ++slotIndex)
+    {
+        uint32 glyph = bot->GetGlyph(slotIndex);
+        if (GlyphPropertiesEntry const* glyphEntry = sGlyphPropertiesStore.LookupEntry(glyph))
+        {
+            bot->RemoveAurasDueToSpell(glyphEntry->SpellId);
+            bot->SetGlyph(slotIndex, 0, true);
+        }
+    }
+
+    if (spec.glyphs.empty())
+        return;
+
+    std::vector<uint32> glyphItemIds;
+    {
+        std::stringstream ss(spec.glyphs);
+        std::string token;
+        while (std::getline(ss, token, ','))
+        {
+            auto first = std::find_if(token.begin(), token.end(), [](unsigned char c){ return !std::isspace(c); });
+            auto last  = std::find_if(token.rbegin(), token.rend(), [](unsigned char c){ return !std::isspace(c); }).base();
+            if (first < last)
+                glyphItemIds.push_back(static_cast<uint32>(std::stoul(std::string(first, last))));
+        }
+    }
+
+    if (glyphItemIds.empty())
+        return;
+
+    uint32 level = bot->GetLevel();
+    uint32 maxSlot = 0;
+    if (level >= 15) maxSlot = 2;
+    if (level >= 30) maxSlot = 3;
+    if (level >= 50) maxSlot = 4;
+    if (level >= 70) maxSlot = 5;
+    if (level >= 80) maxSlot = 6;
+
+    if (!maxSlot)
+        return;
+
+    static const uint8 glyphOrder[6] = {0, 1, 3, 2, 4, 5};
+
+    for (uint32 slotIndex = 0; slotIndex < maxSlot; ++slotIndex)
+    {
+        if (slotIndex >= glyphItemIds.size())
+            break;
+
+        uint8 realSlot = glyphOrder[slotIndex];
+        uint32 itemId  = glyphItemIds[slotIndex];
+
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+        if (!proto)
+            continue;
+
+        if (proto->Class != ITEM_CLASS_GLYPH)
+            continue;
+
+        if ((proto->AllowableClass & bot->getClassMask()) == 0 || (proto->AllowableRace & bot->getRaceMask()) == 0)
+            continue;
+
+        if (proto->RequiredLevel > bot->GetLevel())
+            continue;
+
+        uint32 glyphId = 0;
+        for (uint32 spell = 0; spell < MAX_ITEM_PROTO_SPELLS; ++spell)
+        {
+            uint32 spellId = proto->Spells[spell].SpellId;
+            SpellInfo const* entry = sSpellMgr->GetSpellInfo(spellId);
+            if (!entry)
+                continue;
+
+            for (uint32 effect = 0; effect <= EFFECT_2; ++effect)
+            {
+                if (entry->Effects[effect].Effect != SPELL_EFFECT_APPLY_GLYPH)
+                    continue;
+
+                glyphId = entry->Effects[effect].MiscValue;
+            }
+        }
+
+        if (!glyphId)
+            continue;
+
+        GlyphPropertiesEntry const* glyphEntry = sGlyphPropertiesStore.LookupEntry(glyphId);
+        if (!glyphEntry)
+            continue;
+
+        uint32 slot = bot->GetGlyphSlot(realSlot);
+        GlyphSlotEntry const* gs = sGlyphSlotStore.LookupEntry(slot);
+        if (!gs || glyphEntry->TypeFlags != gs->TypeFlags)
+            continue;
+
+        bot->CastSpell(bot, glyphEntry->SpellId,
+                       TriggerCastFlags(TRIGGERED_FULL_MASK &
+                                        ~(TRIGGERED_IGNORE_SHAPESHIFT | TRIGGERED_IGNORE_CASTER_AURASTATE)));
+        bot->SetGlyph(realSlot, glyphId, true);
+    }
+
+    bot->SendTalentsInfoData(false);
 }
 
 // ============================================================
@@ -360,20 +472,16 @@ void PvpBotMgr::LoadConfig()
     _enableCcBreakTrinket     = sConfigMgr->GetOption<bool>("PvpBots.EnableCcBreakTrinket",   true);
     _enableHeirloomCcTrinket  = sConfigMgr->GetOption<bool>("PvpBots.EnableHeirloomCcTrinket", true);
 
-    // PvP specs — per-class definitions read from our own config.
-    // Config keys:  PvpBots.SpecName.<class>.<specNo>  (1-indexed, pvp-only)
-    //               PvpBots.SpecLink.<class>.<specNo>.<level>
-    //               PvpBots.SpecGlyph.<class>.<specNo>
     {
         static const uint8  classes[]     = {1, 2, 3, 4, 5, 6, 7, 8, 9, 11};
         static const uint8  checkLevels[] = {40, 60, 65, 70, 75, 80};
-        static const uint32 kMaxSpecNo    = 3;   // max 3 pvp specs per class
+        static const uint32 kMaxSpecNo    = 3; 
 
         _pvpSpecs.clear();
 
         for (uint8 cls : classes)
         {
-            for (uint32 specNo = 1; specNo <= kMaxSpecNo; ++specNo)
+            for (uint32 specNo = 0; specNo < kMaxSpecNo; ++specNo)
             {
                 std::string prefix = "PvpBots.Spec";
                 std::string clsSpec = std::to_string(cls) + "." + std::to_string(specNo);
@@ -381,7 +489,7 @@ void PvpBotMgr::LoadConfig()
                 std::string name = sConfigMgr->GetOption<std::string>(
                     prefix + "Name." + clsSpec, "");
                 if (name.empty())
-                    break;  // specs are contiguous — first gap ends this class
+                    break; 
 
                 PvpSpec spec;
                 spec.name   = name;
@@ -396,7 +504,6 @@ void PvpBotMgr::LoadConfig()
                         spec.links.push_back({lvl, link});
                 }
 
-                // links already in ascending level order (checkLevels is sorted)
                 _pvpSpecs[cls].push_back(std::move(spec));
             }
 
@@ -471,6 +578,7 @@ void PvpBotMgr::LoadConfig()
 // Runs on every startup — safe to call repeatedly (IF NOT EXISTS).
 // This means zero manual SQL steps for the server operator.
 // ============================================================
+
 void PvpBotMgr::EnsureSchema()
 {
     WorldDatabase.DirectExecute(
@@ -1000,34 +1108,51 @@ const char* PvpBotMgr::GetClassName(uint8 classId)
 }
 
 // ============================================================
-// FillRemainingTalents
+// InitPvpTalents
 //
-// After InitTalentsByParsedSpecLink places the spec-link's points, a bot
-// between two level breakpoints (e.g. level 75 using the .60 link) still
-// has free talent points.  This function spends them in primaryTab, working
-// row-by-row and column-by-column, topping up each talent toward its max
-// rank until no free points remain.
+// Applies our PvP spec link, then distributes any leftover talent points
+// into the secondary and tertiary trees (same pattern as InitTalentsTree).
+// This prevents leftover points from being wasted or dumped back into the
+// primary tree, which would distort the intended PvP spec distribution.
+// ============================================================
+void PvpBotMgr::InitPvpTalents(Player* bot, const std::vector<std::vector<uint32>>& parsedSpec, uint8 primaryTab)
+{
+    // Apply our PvP spec link (resets talents first).
+    PlayerbotFactory::InitTalentsByParsedSpecLink(bot, parsedSpec, true);
+
+    // Distribute any leftover points into secondary then tertiary tree,
+    // mirroring the InitTalentsTree overflow pattern.
+    if (bot->GetFreeTalentPoints())
+        FillTalentTab(bot, (primaryTab + 1) % 3);
+    if (bot->GetFreeTalentPoints())
+        FillTalentTab(bot, (primaryTab + 2) % 3);
+
+    bot->SendTalentsInfoData(false);
+}
+
+// ============================================================
+// FillTalentTab
 //
-// This mirrors the private PlayerbotFactory::InitTalents() without touching
+// Spends all free talent points in the given tab, row by row, column by
+// column.  Used by InitPvpTalents for secondary/tertiary tree overflow.
+// Mirrors the private PlayerbotFactory::InitTalents() without touching
 // any playerbots internals.
 // ============================================================
-void PvpBotMgr::FillRemainingTalents(Player* bot, uint32 primaryTab)
+void PvpBotMgr::FillTalentTab(Player* bot, uint32 tab)
 {
     if (!bot->GetFreeTalentPoints())
         return;
 
     uint32 classMask = bot->getClassMask();
 
-    // Collect every talent in this class+tab, keyed by (row, col) for
-    // deterministic row-major iteration.
     std::map<uint32, std::map<uint32, TalentEntry const*>> byRowCol;
     for (uint32 i = 0; i < sTalentStore.GetNumRows(); ++i)
     {
         TalentEntry const* t = sTalentStore.LookupEntry(i);
         if (!t)
             continue;
-        TalentTabEntry const* tab = sTalentTabStore.LookupEntry(t->TalentTab);
-        if (!tab || !(classMask & tab->ClassMask) || tab->tabpage != primaryTab)
+        TalentTabEntry const* tabEntry = sTalentTabStore.LookupEntry(t->TalentTab);
+        if (!tabEntry || !(classMask & tabEntry->ClassMask) || tabEntry->tabpage != tab)
             continue;
         byRowCol[t->Row][t->Col] = t;
     }
@@ -1042,22 +1167,16 @@ void PvpBotMgr::FillRemainingTalents(Player* bot, uint32 primaryTab)
             if (!bot->GetFreeTalentPoints())
                 break;
 
-            // Determine how many ranks this talent has.
             uint32 maxRank = 0;
             while (maxRank < MAX_TALENT_RANK && t->RankID[maxRank])
                 ++maxRank;
             if (!maxRank)
                 continue;
 
-            // LearnTalent(id, rank) is 0-indexed and handles already-learned
-            // ranks gracefully — it only spends points for new ranks.
-            // Clamp to what we can actually afford.
             uint32 targetRank = std::min(maxRank, bot->GetFreeTalentPoints()) - 1;
             bot->LearnTalent(t->TalentID, targetRank);
         }
     }
-
-    bot->SendTalentsInfoData(false);
 }
 
 // ============================================================
