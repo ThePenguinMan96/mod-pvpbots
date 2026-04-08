@@ -1,0 +1,347 @@
+################################################################################
+# mod-pvpbots configuration
+#
+# Creates dedicated PvP-only bots separate from the general randombot pool.
+# Requires mod-playerbots and AiPlayerbot.Enabled = 1.
+#
+# PvP bots run independently of AiPlayerbot.MinRandomBots / MaxRandomBots.
+# AiPlayerbot.RandomBotAutologin does NOT need to be enabled.
+################################################################################
+
+[worldserver]
+
+# Enable or disable mod-pvpbots entirely.
+# Default: 1
+PvpBots.Enable = 1
+
+# Account name prefix for pvpbot accounts (e.g. pvpbot0, pvpbot1, ...).
+# WARNING: Do not change this after bots have been created — orphaned accounts result.
+# Default: "pvpbot"
+PvpBots.AccountPrefix = "pvpbot"
+
+# Total number of PvP bots to create and maintain.
+# Default: 50
+PvpBots.TotalCount = 50
+
+# Faction distribution mode.
+#   0 — All Horde
+#   1 — All Alliance
+#   2 — Alternating 50/50 (recommended)
+#   3 — Custom ratio via HordePercent / AlliancePercent
+# Default: 2
+PvpBots.FactionMode = 2
+
+# Only used when FactionMode = 3. Must sum to 100.
+PvpBots.HordePercent    = 50
+PvpBots.AlliancePercent = 50
+
+# Level distribution across ten brackets.
+# Each bot is assigned a random level within its bracket's range.
+# Values are percentages of PvpBots.TotalCount — must sum to exactly 100.
+# Set a bracket to 0 to exclude that level range entirely.
+# Default: 10% each (evenly spread across all brackets)
+PvpBots.Level10to19Percent = 10
+PvpBots.Level20to29Percent = 10
+PvpBots.Level30to39Percent = 10
+PvpBots.Level40to49Percent = 10
+PvpBots.Level50to59Percent = 10
+PvpBots.Level60Percent     = 10
+PvpBots.Level61to69Percent = 10
+PvpBots.Level70Percent     = 10
+PvpBots.Level71to79Percent = 10
+PvpBots.Level80Percent     = 10
+
+###############################################################################
+# Gear
+###############################################################################
+
+# Maximum item quality that PlayerbotFactory will equip on pvpbots.
+# 1 = Normal  2 = Uncommon  3 = Rare  4 = Epic  5 = Legendary
+# Default: 4 (Epic)
+PvpBots.GearQualityLimit = 4
+
+# Maximum item level (not gearscore) for pvpbot equipment. 0 = no limit.
+# Useful for keeping lower-bracket bots from getting endgame items.
+# WotLK iLvL reference: Naxx = 200-213, Ulduar = 226-245, ToC = 245-258, ICC = 251-284
+# Default: 0 (no limit)
+PvpBots.GearScoreLimit = 0
+
+# Set to 1 to prefer gear with resilience rating over otherwise equal PvE items.
+# Set to 0 if you want bots to use pure StatsWeightCalculator scoring with no
+# preference for resilience.
+# Default: 1
+PvpBots.PreferResilienceGear = 1
+
+# Set to 1 to place the CC-break trinket ("Removes all movement impairing effects
+# and all effects which cause loss of control of your character") in trinket slot 1.
+# This applies to all bots regardless of level. Bots that cannot find a CC-break
+# trinket for their level will use the best PvE trinket instead.
+# Default: 1
+PvpBots.EnableCcBreakTrinket = 1
+
+# Set to 1 to equip the faction heirloom CC-break trinket (Inherited Insignia of
+# the Alliance / Horde, items 44098 / 44097) in trinket slot 1 when no
+# level-appropriate CC-break trinket is found in the cache.
+# These heirlooms scale with the bot's level and have no level requirement.
+# Note: if the server enforces account-bound restrictions on heirlooms, the slot
+# will simply remain empty rather than cause an error.
+# Default: 1
+PvpBots.EnableHeirloomCcTrinket = 1
+
+###############################################################################
+# PvP Specs
+#
+# Each class has up to 3 PvP specs numbered 1, 2, 3.
+# One is chosen at random when a bot logs in.
+# The highest-level link that does not exceed the bot's level is used.
+#
+# PvpBots.SpecName.<class>.<specNo>         = display name
+# PvpBots.SpecLink.<class>.<specNo>.<level> = wowhead-style talent link
+# PvpBots.SpecGlyph.<class>.<specNo>        = major1,minor1,major2,minor2,minor3,major3
+#
+# Specs are contiguous — a missing SpecName.X.1 means no specs for class X.
+# Talent links are taken directly from the playerbots premade spec list,
+# re-numbered so that 1 = first PvP spec, 2 = second, 3 = third.
+###############################################################################
+
+####################################################################################################
+# WARRIOR (class 1)
+####################################################################################################
+
+PvpBots.SpecName.1.1  = Arms
+PvpBots.SpecGlyph.1.1 = 43417,43397,43423,43396,49084,43421
+PvpBots.SpecLink.1.1.60 = 0320232023331100032212012221251
+PvpBots.SpecLink.1.1.80 = 0320332023335100232212013231251-3250001
+
+PvpBots.SpecName.1.2  = Fury
+PvpBots.SpecGlyph.1.2 = 43432,43397,43417,43395,43396,43418
+PvpBots.SpecLink.1.2.60 = -325000131500212250120511351
+PvpBots.SpecLink.1.2.80 = 03220300233-325000131500212250122511351
+
+PvpBots.SpecName.1.3  = Prot
+PvpBots.SpecGlyph.1.3 = 43425,43397,43415,43396,49084,45792
+PvpBots.SpecLink.1.3.60 = --250031220223012520332113321
+PvpBots.SpecLink.1.3.80 = 0502300123-3-250031220223012521332113321
+
+####################################################################################################
+# PALADIN (class 2)
+####################################################################################################
+
+PvpBots.SpecName.2.1  = Holy
+PvpBots.SpecGlyph.2.1 = 41110,43367,45746,43366,43365,45747
+PvpBots.SpecLink.2.1.60 = 50332150300013050133215221
+PvpBots.SpecLink.2.1.80 = 50332150300013050133315221-5032013122
+
+PvpBots.SpecName.2.2  = Prot
+PvpBots.SpecGlyph.2.2 = 41092,43369,41101,43368,43365,45745
+PvpBots.SpecLink.2.2.60 = -15320130223122311323311321
+PvpBots.SpecLink.2.2.80 = -15320130223122321333312321-052300502
+
+PvpBots.SpecName.2.3  = Ret
+PvpBots.SpecGlyph.2.3 = 41095,43369,41102,43368,43365,45747
+PvpBots.SpecLink.2.3.60 = --05230250203331222133201321
+PvpBots.SpecLink.2.3.80 = -1532013022-05230250203331322133201321
+
+####################################################################################################
+# HUNTER (class 3)
+####################################################################################################
+
+PvpBots.SpecName.3.1  = BM
+PvpBots.SpecGlyph.3.1 = 42897,42900,42902,43356,43338,42900
+PvpBots.SpecLink.3.1.60 = 05203201505012233100531151
+PvpBots.SpecLink.3.1.80 = 05203201505012233100531351-005305101-03
+
+PvpBots.SpecName.3.2  = MM
+PvpBots.SpecGlyph.3.2 = 42912,43351,42897,43338,43356,42904
+PvpBots.SpecLink.3.2.60 = -034305101030213231135031051
+PvpBots.SpecLink.3.2.80 = -035305101030213233135031051-53013020102
+
+PvpBots.SpecName.3.3  = Survival
+PvpBots.SpecGlyph.3.3 = 42912,43350,42904,43356,43338,45731
+PvpBots.SpecLink.3.3.60 = --2300302410233030533135001031
+PvpBots.SpecLink.3.3.80 = -005305201-2300302510233330533135001031
+
+####################################################################################################
+# ROGUE (class 4)
+####################################################################################################
+
+PvpBots.SpecName.4.1  = Assassination
+PvpBots.SpecGlyph.4.1 = 42974,43380,45768,43379,43376,42971
+PvpBots.SpecLink.4.1.60 = 005303103342102522103031--50002
+PvpBots.SpecLink.4.1.80 = 005303103342102522103031-004-532023203000012
+
+PvpBots.SpecName.4.2  = Combat
+PvpBots.SpecGlyph.4.2 = 42972,43380,45762,43376,43378,42971
+PvpBots.SpecLink.4.2.60 = -3250002050225010223102321251
+PvpBots.SpecLink.4.2.80 = 305120105-3250002050235010223102521251
+
+PvpBots.SpecName.4.3  = Subtlety
+PvpBots.SpecGlyph.4.3 = 42968,43376,45764,43380,43379,42971
+PvpBots.SpecLink.4.3.60 = --5120212030320121330133221251
+PvpBots.SpecLink.4.3.80 = 3023031-3-5120212030320121350135231251
+
+####################################################################################################
+# PRIEST (class 5)
+####################################################################################################
+
+PvpBots.SpecName.5.1  = Disc
+PvpBots.SpecGlyph.5.1 = 42408,43371,45760,43370,43374,45756
+PvpBots.SpecLink.5.1.60 = 5003203130320512201323031051
+PvpBots.SpecLink.5.1.80 = 5003203130322512331013231151-23050113
+
+PvpBots.SpecName.5.2  = Holy
+PvpBots.SpecGlyph.5.2 = 42411,43371,42408,43370,43374,45755
+PvpBots.SpecLink.5.2.60 = -235501031000152430320031151
+PvpBots.SpecLink.5.2.80 = 500320313-235501031000152530320031351
+
+PvpBots.SpecName.5.3  = Shadow
+PvpBots.SpecGlyph.5.3 = 42407,43371,45753,43370,43374,42408
+PvpBots.SpecLink.5.3.60 = --005323241223112003102311351
+PvpBots.SpecLink.5.3.80 = 50332031003--005323241223112003102311351
+
+####################################################################################################
+# DEATH KNIGHT (class 6)
+####################################################################################################
+
+PvpBots.SpecName.6.1  = Blood
+PvpBots.SpecGlyph.6.1 = 43534,43535,45799,43673,43672,45805
+PvpBots.SpecLink.6.1.60 = 2305021503003313201222101351
+PvpBots.SpecLink.6.1.80 = 2305021503003313201222101351--032232300023
+
+PvpBots.SpecName.6.2  = Frost
+PvpBots.SpecGlyph.6.2 = 43543,43539,45800,43673,43672,45806
+PvpBots.SpecLink.6.2.60 = -32015351022203012001233101251
+PvpBots.SpecLink.6.2.80 = 0055-32015351052203012001233131351-03
+
+PvpBots.SpecName.6.3  = Unholy
+PvpBots.SpecGlyph.6.3 = 45804,43539,43549,43673,43672,45805
+PvpBots.SpecLink.6.3.60 = --2301323301002152230101203103151
+PvpBots.SpecLink.6.3.80 = -320050410002-2301323301002152230101203133151
+
+####################################################################################################
+# SHAMAN (class 7)
+####################################################################################################
+
+PvpBots.SpecName.7.1  = Elemental
+PvpBots.SpecGlyph.7.1 = 45778,43388,45770,43725,43386,41524
+PvpBots.SpecLink.7.1.60 = 0533001503213051322301341
+PvpBots.SpecLink.7.1.80 = 0533051503213051322331351-023212001
+
+PvpBots.SpecName.7.2  = Enhancement
+PvpBots.SpecGlyph.7.2 = 45778,43388,41526,43725,43344,45771
+PvpBots.SpecLink.7.2.60 = -02305203105001333201131131151
+PvpBots.SpecLink.7.2.80 = 0503351-02305203105001333211131231251
+
+PvpBots.SpecName.7.3  = Resto
+PvpBots.SpecGlyph.7.3 = 45778,43388,45775,43725,43344,41535
+PvpBots.SpecLink.7.3.60 = --05032331331013501120321251
+PvpBots.SpecLink.7.3.80 = -023222301004-05032331331013501120331251
+
+####################################################################################################
+# MAGE (class 8)
+####################################################################################################
+
+PvpBots.SpecName.8.1  = Arcane
+PvpBots.SpecGlyph.8.1 = 42735,43364,42738,43360,43357,42752
+PvpBots.SpecLink.8.1.60 = 205323200122032103303102015221
+PvpBots.SpecLink.8.1.80 = 205323200122032103303102015321-23002-303020301
+
+PvpBots.SpecName.8.2  = Fire
+PvpBots.SpecGlyph.8.2 = 42738,43364,42752,43360,43357,45737
+PvpBots.SpecLink.8.2.60 = -2305202312020031223122301351
+PvpBots.SpecLink.8.2.80 = 230321030122-2305212312020031223122301351
+
+PvpBots.SpecName.8.3  = Frost
+PvpBots.SpecGlyph.8.3 = 42738,43364,45740,43357,43360,42752
+PvpBots.SpecLink.8.3.60 = --3533203210203100232102231151
+PvpBots.SpecLink.8.3.80 = 23032103010203--3533203210203100232102231151
+
+####################################################################################################
+# WARLOCK (class 9)
+####################################################################################################
+
+PvpBots.SpecName.9.1  = Affliction
+PvpBots.SpecGlyph.9.1 = 50077,43392,42455,43390,43389,45783
+PvpBots.SpecLink.9.1.60 = 0350002231223011053502301151
+PvpBots.SpecLink.9.1.80 = 2350002231223111053502301151-2032003011302
+
+PvpBots.SpecName.9.2  = Demonology
+PvpBots.SpecGlyph.9.2 = 42459,43392,45780,43390,43389,45783
+PvpBots.SpecLink.9.2.60 = -003203301135202530135001251
+PvpBots.SpecLink.9.2.80 = -003203301135202530135011351-052300152
+
+PvpBots.SpecName.9.3  = Destruction
+PvpBots.SpecGlyph.9.3 = 42471,43392,42454,43390,43389,45783
+PvpBots.SpecLink.9.3.60 = --05230015220331351005031051
+PvpBots.SpecLink.9.3.80 = -2032003311302-05230015220331351005031051
+
+####################################################################################################
+# DRUID (class 11)
+####################################################################################################
+
+PvpBots.SpecName.11.1  = Balance
+PvpBots.SpecGlyph.11.1 = 40921,43331,45622,43674,43335,45623
+PvpBots.SpecLink.11.1.60 = 5012203115331002213032311231
+PvpBots.SpecLink.11.1.80 = 5022203125331003213035311231--230033012
+
+PvpBots.SpecName.11.2  = Cat
+PvpBots.SpecGlyph.11.2 = 40902,43331,45601,43674,43335,40901
+PvpBots.SpecLink.11.2.60 = -513202032322010053103030310501
+PvpBots.SpecLink.11.2.80 = -523202032322010053103030310511-205503012
+
+PvpBots.SpecName.11.3  = Resto
+PvpBots.SpecGlyph.11.3 = 40913,43331,40906,43335,43674,45623
+PvpBots.SpecLink.11.3.60 = --230033312031500511350013051
+PvpBots.SpecLink.11.3.80 = 05320021--230033312031500531353013251
+
+# If enabled, pvpbots will not log in until at least one real (non-bot) player
+# is online, and will log out after all real players have been offline for
+# DisabledWithoutRealPlayerLogoutDelay seconds.
+# This saves server resources on idle servers.
+# Default: 0 (bots are always online)
+PvpBots.DisabledWithoutRealPlayer = 0
+
+# Seconds to wait after a real player logs in before pvpbots log in.
+# Only used when DisabledWithoutRealPlayer = 1.
+# Default: 30
+PvpBots.DisabledWithoutRealPlayerLoginDelay = 30
+
+# Seconds to wait after the last real player logs out before pvpbots log out.
+# Only used when DisabledWithoutRealPlayer = 1.
+# Default: 300
+PvpBots.DisabledWithoutRealPlayerLogoutDelay = 300
+
+# Delete all pvpbot accounts, characters, and registry data.
+# To perform a full reset:
+#   1. Set to 1 and restart — deletion runs, then server stops
+#   2. Set back to 0 and restart — bots are recreated fresh
+# WARNING: This permanently deletes all pvpbot characters.
+# Default: 0
+PvpBots.DeletePvpBotAccounts = 0
+
+# Enable verbose debug logging for this module.
+# Default: 0
+PvpBots.Debug = 0
+
+################################################################################
+# Logging
+#
+# AzerothCore only reads Appender/Logger entries from worldserver.conf —
+# entries in module conf files are ignored by the log system.
+#
+# To get a dedicated PvpBots.log alongside console output, add these two lines
+# to your worldserver.conf (near the other Appender/Logger definitions):
+#
+#   Appender.PvpBots=2,5,0,PvpBots.log,w
+#   Logger.pvpbots=5,Console PvpBots
+#
+# Appender format: Type,Level,Flags,Filename,Mode
+#   Type  — 2 = File
+#   Level — 5 = Debug (captures Info, Warn, Error, Fatal too)
+#   Flags — 0 = None
+#   Mode  — w = overwrite each restart (use 'a' to append instead)
+#
+# Logger format: Level,AppenderList
+#   Level        — 5 = Debug
+#   AppenderList — space-separated appender names defined above
+################################################################################
