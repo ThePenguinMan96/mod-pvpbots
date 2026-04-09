@@ -221,6 +221,7 @@ private:
     void       DebugLog(const std::string& msg) const;
 
     void CleanupInvalidPets();
+    void CleanupDkStartingArea();
     void BuildPvpItemCache();
     void EquipPvpGear(Player* bot);
     void EquipCcBreakTrinket(Player* bot);
@@ -236,13 +237,9 @@ private:
     // bypassing sPlayerbotAIConfig.parsedSpecGlyph entirely.
     void InitPvpGlyphs(Player* bot, const PvpSpec& spec);
 
-    // Apply our PvP spec link, then distribute any leftover points into
-    // secondary and tertiary trees (same pattern as InitTalentsTree).
-    void InitPvpTalents(Player* bot, const std::vector<std::vector<uint32>>& parsedSpec, uint8 primaryTab);
-
-    // Spend all free talent points in the given tab, row by row.
-    // Used by InitPvpTalents for secondary/tertiary tree overflow.
-    void FillTalentTab(Player* bot, uint32 tab);
+    // Apply the PvP spec from config, including talents, glyphs, and strategy reset.
+    // Mirrors the "talents spec <name>" command flow exactly.
+    void InitPvpSpec(Player* bot, const PvpSpec* selectedSpec, uint8 primaryTab);
 
     static const char* GetRaceName(uint8 race);
     static const char* GetClassName(uint8 classId);

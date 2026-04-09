@@ -73,6 +73,7 @@ void PvpBotMgr::Initialize()
     EnsureSchema();
     LoadFromDB();
     CleanupInvalidPets();
+    CleanupDkStartingArea();
     EnsureBotCount();
 
     if (_disabledWithoutRealPlayer)
@@ -227,21 +228,23 @@ void PvpBotMgr::OnBotLoginInternal(Player* bot)
 
 void PvpBotMgr::InitPvpBot(Player* bot)
 {
-    uint8 level   = bot->GetLevel();
+    uint8 level = bot->GetLevel();
     uint8 classId = bot->getClass();
 
     std::string specName = "Unknown";
-    std::vector<std::vector<uint32>> parsedSpec;
     uint32 primaryTab = 0;
     const PvpSpec* selectedSpec = nullptr;
 
     auto it = _pvpSpecs.find(classId);
     if (it != _pvpSpecs.end() && !it->second.empty())
     {
+        // Pick a random spec for this class
         selectedSpec =
             &it->second[urand(0, static_cast<uint32>(it->second.size()) - 1)];
         specName = selectedSpec->name;
 
+        // Calculate which tree is primary by counting talent points
+        std::vector<std::vector<uint32>> parsedSpec;
         std::string specLinkStr;
         for (const auto& ll : selectedSpec->links)
         {
@@ -250,19 +253,21 @@ void PvpBotMgr::InitPvpBot(Player* bot)
             else
                 break;
         }
+        if (specLinkStr.empty() && !selectedSpec->links.empty())
+            specLinkStr = selectedSpec->links[0].link;
 
         if (!specLinkStr.empty())
             parsedSpec = PlayerbotAIConfig::ParseTempTalentsOrder(classId, specLinkStr);
-    }
 
-    if (!parsedSpec.empty())
-    {
-        uint32 tabPoints[3] = {0, 0, 0};
-        for (const auto& entry : parsedSpec)
-            if (entry.size() >= 4 && entry[0] < 3)
-                tabPoints[entry[0]] += entry[3];
-        if (tabPoints[1] > tabPoints[0]) primaryTab = 1;
-        if (tabPoints[2] > tabPoints[primaryTab]) primaryTab = 2;
+        if (!parsedSpec.empty())
+        {
+            uint32 tabPoints[3] = { 0, 0, 0 };
+            for (const auto& entry : parsedSpec)
+                if (entry.size() >= 4 && entry[0] < 3)
+                    tabPoints[entry[0]] += entry[3];
+            if (tabPoints[1] > tabPoints[0]) primaryTab = 1;
+            if (tabPoints[2] > tabPoints[primaryTab]) primaryTab = 2;
+        }
     }
 
     PlayerbotFactory factory(bot, level, _gearQualityLimit, _gearScoreLimit);
@@ -277,23 +282,64 @@ void PvpBotMgr::InitPvpBot(Player* bot)
         bot->GetGUID().GetCounter()
     );
 
-    bot->GiveLevel(level);      
+    bot->GiveLevel(level);
     bot->InitStatsForLevel(true);
     bot->RemoveAllSpellCooldown();
     factory.UnbindInstance();
     factory.InitInstanceQuests();
     factory.InitAttunementQuests();
+
+    // Death Knights earn talent points through quests in the Ebon Hold starting
+    // zone (RewardTalents > 0). These quests have no reward spell so they are
+    // excluded from PlayerbotFactory::classQuestIds and never processed by
+    // InitInstanceQuests. Without rewarding them, m_questRewardTalentCount = 0,
+    // which restricts talent points to (level - 55) inside MAP_EBON_HOLD.
+    // Rewarding them here sets m_questRewardTalentCount = 46 (total across all
+    // DK starting quests), ensuring full talent availability on any map.
+    if (classId == CLASS_DEATH_KNIGHT)
+    {
+        static const std::vector<uint32> dkTalentQuestIds = {
+            12678, 12679, 12680, 12687, 12698, 12701, 12706,
+            12716, 12719, 12720, 12722, 12724, 12725, 12727,
+            12733,
+            12739, 12740, 12741, 12742, 12743, 12744,  // "A Special Surprise" —
+            12745, 12746, 12747, 12748, 12749, 12750,  // racial variants; only the
+                                                        // matching race will pass
+                                                        // SatisfyQuestRace
+            12751, 12754, 12755, 12756, 12757, 12779, 12801
+        };
+
+        uint32 savedXP = bot->GetUInt32Value(PLAYER_XP);
+
+        for (uint32 questId : dkTalentQuestIds)
+        {
+            if (bot->IsQuestRewarded(questId))
+                continue;
+
+            Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+            if (!quest)
+                continue;
+
+            if (!bot->SatisfyQuestClass(quest, false) || !bot->SatisfyQuestRace(quest, false))
+                continue;
+
+            bot->SetQuestStatus(questId, QUEST_STATUS_COMPLETE);
+            bot->RewardQuest(quest, 0, bot, false);
+        }
+
+        // RewardQuest can grant XP and level ups — restore the intended level.
+        bot->GiveLevel(level);
+        bot->SetUInt32Value(PLAYER_XP, savedXP);
+    }
+
     bot->LearnDefaultSkills();
     factory.InitSkills();
     factory.InitClassSpells();
     factory.InitAvailableSpells();
 
-    if (!parsedSpec.empty())
-        InitPvpTalents(bot, parsedSpec, primaryTab);
-
-    PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
-    if (botAI)
-        botAI->ResetStrategies(false);
+    // Apply PvP talents (includes glyphs and strategy reset)
+    if (selectedSpec)
+        InitPvpSpec(bot, selectedSpec, primaryTab);
 
     factory.InitAvailableSpells();
     factory.InitReputation();
@@ -307,9 +353,6 @@ void PvpBotMgr::InitPvpBot(Player* bot)
     factory.InitReagents();
     factory.InitKeyring();
     factory.InitConsumables();
-
-    if (selectedSpec)
-        InitPvpGlyphs(bot, *selectedSpec);
 
     if (level >= 66)
         EquipPvpGear(bot);
@@ -343,7 +386,6 @@ void PvpBotMgr::InitPvpBot(Player* bot)
 
     DebugLog("InitPvpBot complete: " + bot->GetName() + " [" + specName + "]");
 }
-
 
 void PvpBotMgr::InitPvpGlyphs(Player* bot, const PvpSpec& spec)
 {
@@ -1108,75 +1150,65 @@ const char* PvpBotMgr::GetClassName(uint8 classId)
 }
 
 // ============================================================
-// InitPvpTalents
+// InitPvpSpec
 //
-// Applies our PvP spec link, then distributes any leftover talent points
-// into the secondary and tertiary trees (same pattern as InitTalentsTree).
-// This prevents leftover points from being wasted or dumped back into the
-// primary tree, which would distort the intended PvP spec distribution.
+// Applies talents, glyphs, and resets strategies.
+// Mirrors the "talents spec <name>" command flow exactly.
 // ============================================================
-void PvpBotMgr::InitPvpTalents(Player* bot, const std::vector<std::vector<uint32>>& parsedSpec, uint8 primaryTab)
+void PvpBotMgr::InitPvpSpec(Player* bot, const PvpSpec* selectedSpec, uint8 primaryTab)
 {
-    // Apply our PvP spec link (resets talents first).
-    PlayerbotFactory::InitTalentsByParsedSpecLink(bot, parsedSpec, true);
-
-    // Distribute any leftover points into secondary then tertiary tree,
-    // mirroring the InitTalentsTree overflow pattern.
-    if (bot->GetFreeTalentPoints())
-        FillTalentTab(bot, (primaryTab + 1) % 3);
-    if (bot->GetFreeTalentPoints())
-        FillTalentTab(bot, (primaryTab + 2) % 3);
-
-    bot->SendTalentsInfoData(false);
-}
-
-// ============================================================
-// FillTalentTab
-//
-// Spends all free talent points in the given tab, row by row, column by
-// column.  Used by InitPvpTalents for secondary/tertiary tree overflow.
-// Mirrors the private PlayerbotFactory::InitTalents() without touching
-// any playerbots internals.
-// ============================================================
-void PvpBotMgr::FillTalentTab(Player* bot, uint32 tab)
-{
-    if (!bot->GetFreeTalentPoints())
+    if (!bot || !selectedSpec)
         return;
 
-    uint32 classMask = bot->getClassMask();
+    uint8 level   = bot->GetLevel();
+    uint8 classId = bot->getClass();
 
-    std::map<uint32, std::map<uint32, TalentEntry const*>> byRowCol;
-    for (uint32 i = 0; i < sTalentStore.GetNumRows(); ++i)
+    if (selectedSpec->links.empty())
     {
-        TalentEntry const* t = sTalentStore.LookupEntry(i);
-        if (!t)
-            continue;
-        TalentTabEntry const* tabEntry = sTalentTabStore.LookupEntry(t->TalentTab);
-        if (!tabEntry || !(classMask & tabEntry->ClassMask) || tabEntry->tabpage != tab)
-            continue;
-        byRowCol[t->Row][t->Col] = t;
+        DebugLog("No talent links configured for spec " + selectedSpec->name);
+        return;
     }
 
-    for (auto& [row, cols] : byRowCol)
+    // Reset once up front — all subsequent applications use reset=false so we
+    // accumulate points across breakpoints, exactly like InitTalentsBySpecNo does.
+    bot->resetTalents(true);
+
+    // Walk every configured breakpoint in ascending level order and apply it.
+    // GetFreeTalentPoints() naturally caps spending — a level 70 bot applies the
+    // .60 link fully, then applies as many steps of the .80 link as points allow.
+    // This mirrors the cumulative behaviour of playerbots' InitTalentsBySpecNo.
+    // All links come from our pvpbots config (selectedSpec->links), never playerbots.
+    bool anyApplied = false;
+    for (const auto& ll : selectedSpec->links)
     {
-        if (!bot->GetFreeTalentPoints())
+        if (bot->GetFreeTalentPoints() == 0)
             break;
 
-        for (auto& [col, t] : cols)
+        std::vector<std::vector<uint32>> parsed =
+            PlayerbotAIConfig::ParseTempTalentsOrder(classId, ll.link);
+
+        if (parsed.empty())
         {
-            if (!bot->GetFreeTalentPoints())
-                break;
-
-            uint32 maxRank = 0;
-            while (maxRank < MAX_TALENT_RANK && t->RankID[maxRank])
-                ++maxRank;
-            if (!maxRank)
-                continue;
-
-            uint32 targetRank = std::min(maxRank, bot->GetFreeTalentPoints()) - 1;
-            bot->LearnTalent(t->TalentID, targetRank);
+            DebugLog("Failed to parse talent link (level " + std::to_string(ll.level) +
+                     ") for spec " + selectedSpec->name);
+            continue;
         }
+
+        PlayerbotFactory::InitTalentsByParsedSpecLink(bot, parsed, false);
+        anyApplied = true;
     }
+
+    if (!anyApplied)
+    {
+        DebugLog("No talent links applied for spec " + selectedSpec->name +
+                 " at level " + std::to_string(level));
+        return;
+    }
+
+    // Reset strategies so the AI's role/type reflects the new talent tree.
+    PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+    if (botAI)
+        botAI->ResetStrategies(false);
 }
 
 // ============================================================
@@ -1219,6 +1251,51 @@ void PvpBotMgr::CleanupInvalidPets()
 
     LOG_INFO("playerbots",
         "[mod-pvpbots] Cleaned up stale pet data for {} non-pet bots.", count);
+}
+
+// ============================================================
+// CleanupDkStartingArea
+//
+// Death Knights stored in MAP_EBON_HOLD (map 609) receive a severely
+// restricted talent point formula when CalculateTalentsPoints() fires
+// during InitPvpSpec:
+//
+//   Ebon Hold:  (level - 55) + m_questRewardTalentCount
+//   Everywhere: level - 9
+//
+// A level 60 DK in Ebon Hold with no completed talent-reward quests gets
+// only 5 free points instead of 51 — causing the spec link to under-spend.
+//
+// Fix: before any bot logs in, move every DK pvpbot whose stored map is
+// 609 to Light's Hope Chapel in Eastern Plaguelands (map 0). This is the
+// natural exit destination after completing the DK starting zone, so it's
+// a lore-appropriate position. The characters table is updated directly;
+// the bot is not yet in the world so no TeleportTo is needed.
+// ============================================================
+void PvpBotMgr::CleanupDkStartingArea()
+{
+    uint32 count = 0;
+
+    for (const auto& entry : _bots)
+    {
+        if (entry.classId != CLASS_DEATH_KNIGHT)
+            continue;
+
+        // Light's Hope Chapel, Eastern Plaguelands (map 0)
+        // This is the standard DK exit point from the starting zone.
+        CharacterDatabase.DirectExecute(
+            "UPDATE characters SET map = 0, position_x = 2356.4, position_y = -5664.5, "
+            "position_z = 423.5, orientation = 0.0 WHERE guid = {} AND map = 609",
+            entry.charGuid.GetCounter()
+        );
+        ++count;
+    }
+
+    if (count == 0)
+        return;
+
+    LOG_INFO("playerbots",
+        "[mod-pvpbots] Relocated {} Death Knight bot(s) out of Ebon Hold.", count);
 }
 
 // ============================================================
