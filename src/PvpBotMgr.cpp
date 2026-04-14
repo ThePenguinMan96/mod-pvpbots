@@ -1,6 +1,13 @@
 /*
  * mod-pvpbots — PvpBotMgr.cpp
  *
+ * Manager core: singleton, lifecycle, config, DB, bot creation/deletion,
+ * and utility helpers.
+ *
+ *   PvpBotInit.cpp — InitPvpBot, InitPvpGlyphs, InitPvpSpec
+ *   PvpBotGear.cpp — BuildPvpItemCache, BuildHeirloomCache, ScoreHeirloom,
+ *                    GetWeaponSpeedMultiplier, InitPvpEquipment, and helpers
+ *
  * LoginBot() bypasses PlayerbotHolder::AddPlayerBot entirely, cutting
  * RandomPlayerbotMgr out of our bot lifecycle. Bots are loaded via
  * AzerothCore's LoginQueryHolder + HandlePlayerLoginFromDB, the PlayerbotAI
@@ -15,6 +22,7 @@
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "Item.h"
 #include "Log.h"
 #include "SpellMgr.h"
 #include "ObjectAccessor.h"
@@ -25,11 +33,13 @@
 #include "WorldSession.h"
 
 // mod-playerbots
+#include "AiFactory.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotFactory.h"
 #include "PlayerbotMgr.h"
 #include "Playerbots.h"             // GET_PLAYERBOT_AI
+#include "RandomItemMgr.h"
 #include "RandomPlayerbotFactory.h"
 #include "StatsWeightCalculator.h"
 
@@ -70,6 +80,8 @@ void PvpBotMgr::Initialize()
     LOG_INFO("playerbots", "[mod-pvpbots] Starting. Total bots: {}", _totalCount);
 
     BuildPvpItemCache();
+    if (_allowHeirlooms)
+        BuildHeirloomCache();
     EnsureSchema();
     LoadFromDB();
     CleanupInvalidPets();
@@ -225,273 +237,6 @@ void PvpBotMgr::OnBotLoginInternal(Player* bot)
     );
 }
 
-
-void PvpBotMgr::InitPvpBot(Player* bot)
-{
-    uint8 level = bot->GetLevel();
-    uint8 classId = bot->getClass();
-
-    std::string specName = "Unknown";
-    uint32 primaryTab = 0;
-    const PvpSpec* selectedSpec = nullptr;
-
-    auto it = _pvpSpecs.find(classId);
-    if (it != _pvpSpecs.end() && !it->second.empty())
-    {
-        // Pick a random spec for this class
-        selectedSpec =
-            &it->second[urand(0, static_cast<uint32>(it->second.size()) - 1)];
-        specName = selectedSpec->name;
-
-        // Calculate which tree is primary by counting talent points
-        std::vector<std::vector<uint32>> parsedSpec;
-        std::string specLinkStr;
-        for (const auto& ll : selectedSpec->links)
-        {
-            if (ll.level <= level)
-                specLinkStr = ll.link;
-            else
-                break;
-        }
-        if (specLinkStr.empty() && !selectedSpec->links.empty())
-            specLinkStr = selectedSpec->links[0].link;
-
-        if (!specLinkStr.empty())
-            parsedSpec = PlayerbotAIConfig::ParseTempTalentsOrder(classId, specLinkStr);
-
-        if (!parsedSpec.empty())
-        {
-            uint32 tabPoints[3] = { 0, 0, 0 };
-            for (const auto& entry : parsedSpec)
-                if (entry.size() >= 4 && entry[0] < 3)
-                    tabPoints[entry[0]] += entry[3];
-            if (tabPoints[1] > tabPoints[0]) primaryTab = 1;
-            if (tabPoints[2] > tabPoints[primaryTab]) primaryTab = 2;
-        }
-    }
-
-    PlayerbotFactory factory(bot, level, _gearQualityLimit, _gearScoreLimit);
-
-    if (bot->isDead())
-        bot->ResurrectPlayer(1.0f, false);
-    bot->CombatStop(true);
-
-    factory.ClearEverything();
-    CharacterDatabase.Execute(
-        "DELETE FROM character_spell WHERE guid = {}",
-        bot->GetGUID().GetCounter()
-    );
-
-    bot->GiveLevel(level);
-    bot->InitStatsForLevel(true);
-    bot->RemoveAllSpellCooldown();
-    factory.UnbindInstance();
-    factory.InitInstanceQuests();
-    factory.InitAttunementQuests();
-
-    // Death Knights earn talent points through quests in the Ebon Hold starting
-    // zone (RewardTalents > 0). These quests have no reward spell so they are
-    // excluded from PlayerbotFactory::classQuestIds and never processed by
-    // InitInstanceQuests. Without rewarding them, m_questRewardTalentCount = 0,
-    // which restricts talent points to (level - 55) inside MAP_EBON_HOLD.
-    // Rewarding them here sets m_questRewardTalentCount = 46 (total across all
-    // DK starting quests), ensuring full talent availability on any map.
-    if (classId == CLASS_DEATH_KNIGHT)
-    {
-        static const std::vector<uint32> dkTalentQuestIds = {
-            12678, 12679, 12680, 12687, 12698, 12701, 12706,
-            12716, 12719, 12720, 12722, 12724, 12725, 12727,
-            12733,
-            12739, 12740, 12741, 12742, 12743, 12744,  // "A Special Surprise" —
-            12745, 12746, 12747, 12748, 12749, 12750,  // racial variants; only the
-                                                        // matching race will pass
-                                                        // SatisfyQuestRace
-            12751, 12754, 12755, 12756, 12757, 12779, 12801
-        };
-
-        uint32 savedXP = bot->GetUInt32Value(PLAYER_XP);
-
-        for (uint32 questId : dkTalentQuestIds)
-        {
-            if (bot->IsQuestRewarded(questId))
-                continue;
-
-            Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
-            if (!quest)
-                continue;
-
-            if (!bot->SatisfyQuestClass(quest, false) || !bot->SatisfyQuestRace(quest, false))
-                continue;
-
-            bot->SetQuestStatus(questId, QUEST_STATUS_COMPLETE);
-            bot->RewardQuest(quest, 0, bot, false);
-        }
-
-        // RewardQuest can grant XP and level ups — restore the intended level.
-        bot->GiveLevel(level);
-        bot->SetUInt32Value(PLAYER_XP, savedXP);
-    }
-
-    bot->LearnDefaultSkills();
-    factory.InitSkills();
-    factory.InitClassSpells();
-    factory.InitAvailableSpells();
-
-    // Apply PvP talents (includes glyphs and strategy reset)
-    if (selectedSpec)
-        InitPvpSpec(bot, selectedSpec, primaryTab);
-
-    factory.InitAvailableSpells();
-    factory.InitReputation();
-    factory.InitSpecialSpells();
-    factory.InitMounts();
-    factory.InitEquipment(false);
-    factory.InitBags();
-    factory.InitAmmo();
-    factory.InitFood();
-    factory.InitPotions();
-    factory.InitReagents();
-    factory.InitKeyring();
-    factory.InitConsumables();
-
-    if (level >= 66)
-        EquipPvpGear(bot);
-    else if (_enableCcBreakTrinket)
-        EquipCcBreakTrinket(bot);
-
-    if (level >= sPlayerbotAIConfig.minEnchantingBotLevel)
-        factory.ApplyEnchantAndGemsNew(true);
-
-    if (classId != CLASS_HUNTER && classId != CLASS_WARLOCK && classId != CLASS_DEATH_KNIGHT)
-    {
-        if (Pet* pet = bot->GetPet())
-            pet->Remove(PET_SAVE_AS_DELETED);
-        CharacterDatabase.Execute(
-            "DELETE FROM character_pet WHERE owner = {}",
-            bot->GetGUID().GetCounter()
-        );
-    }
-    else if (level >= 10)
-    {
-        bot->RemovePet(nullptr, PET_SAVE_AS_CURRENT, true);
-        bot->RemovePet(nullptr, PET_SAVE_NOT_IN_SLOT, true);
-        factory.InitPet();
-        factory.InitPetTalents();
-    }
-
-    bot->SetMoney(urand(level * 100000, level * 5 * 100000));
-    bot->SetHealth(bot->GetMaxHealth());
-    bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
-    bot->SaveToDB(false, false);
-
-    DebugLog("InitPvpBot complete: " + bot->GetName() + " [" + specName + "]");
-}
-
-void PvpBotMgr::InitPvpGlyphs(Player* bot, const PvpSpec& spec)
-{
-    bot->InitGlyphsForLevel();
-
-    for (uint32 slotIndex = 0; slotIndex < MAX_GLYPH_SLOT_INDEX; ++slotIndex)
-    {
-        uint32 glyph = bot->GetGlyph(slotIndex);
-        if (GlyphPropertiesEntry const* glyphEntry = sGlyphPropertiesStore.LookupEntry(glyph))
-        {
-            bot->RemoveAurasDueToSpell(glyphEntry->SpellId);
-            bot->SetGlyph(slotIndex, 0, true);
-        }
-    }
-
-    if (spec.glyphs.empty())
-        return;
-
-    std::vector<uint32> glyphItemIds;
-    {
-        std::stringstream ss(spec.glyphs);
-        std::string token;
-        while (std::getline(ss, token, ','))
-        {
-            auto first = std::find_if(token.begin(), token.end(), [](unsigned char c){ return !std::isspace(c); });
-            auto last  = std::find_if(token.rbegin(), token.rend(), [](unsigned char c){ return !std::isspace(c); }).base();
-            if (first < last)
-                glyphItemIds.push_back(static_cast<uint32>(std::stoul(std::string(first, last))));
-        }
-    }
-
-    if (glyphItemIds.empty())
-        return;
-
-    uint32 level = bot->GetLevel();
-    uint32 maxSlot = 0;
-    if (level >= 15) maxSlot = 2;
-    if (level >= 30) maxSlot = 3;
-    if (level >= 50) maxSlot = 4;
-    if (level >= 70) maxSlot = 5;
-    if (level >= 80) maxSlot = 6;
-
-    if (!maxSlot)
-        return;
-
-    static const uint8 glyphOrder[6] = {0, 1, 3, 2, 4, 5};
-
-    for (uint32 slotIndex = 0; slotIndex < maxSlot; ++slotIndex)
-    {
-        if (slotIndex >= glyphItemIds.size())
-            break;
-
-        uint8 realSlot = glyphOrder[slotIndex];
-        uint32 itemId  = glyphItemIds[slotIndex];
-
-        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
-        if (!proto)
-            continue;
-
-        if (proto->Class != ITEM_CLASS_GLYPH)
-            continue;
-
-        if ((proto->AllowableClass & bot->getClassMask()) == 0 || (proto->AllowableRace & bot->getRaceMask()) == 0)
-            continue;
-
-        if (proto->RequiredLevel > bot->GetLevel())
-            continue;
-
-        uint32 glyphId = 0;
-        for (uint32 spell = 0; spell < MAX_ITEM_PROTO_SPELLS; ++spell)
-        {
-            uint32 spellId = proto->Spells[spell].SpellId;
-            SpellInfo const* entry = sSpellMgr->GetSpellInfo(spellId);
-            if (!entry)
-                continue;
-
-            for (uint32 effect = 0; effect <= EFFECT_2; ++effect)
-            {
-                if (entry->Effects[effect].Effect != SPELL_EFFECT_APPLY_GLYPH)
-                    continue;
-
-                glyphId = entry->Effects[effect].MiscValue;
-            }
-        }
-
-        if (!glyphId)
-            continue;
-
-        GlyphPropertiesEntry const* glyphEntry = sGlyphPropertiesStore.LookupEntry(glyphId);
-        if (!glyphEntry)
-            continue;
-
-        uint32 slot = bot->GetGlyphSlot(realSlot);
-        GlyphSlotEntry const* gs = sGlyphSlotStore.LookupEntry(slot);
-        if (!gs || glyphEntry->TypeFlags != gs->TypeFlags)
-            continue;
-
-        bot->CastSpell(bot, glyphEntry->SpellId,
-                       TriggerCastFlags(TRIGGERED_FULL_MASK &
-                                        ~(TRIGGERED_IGNORE_SHAPESHIFT | TRIGGERED_IGNORE_CASTER_AURASTATE)));
-        bot->SetGlyph(realSlot, glyphId, true);
-    }
-
-    bot->SendTalentsInfoData(false);
-}
-
 // ============================================================
 // LoadConfig
 // ============================================================
@@ -508,16 +253,21 @@ void PvpBotMgr::LoadConfig()
     _loginDelay       = sConfigMgr->GetOption<uint32>     ("PvpBots.DisabledWithoutRealPlayerLoginDelay",  30);
     _logoutDelay      = sConfigMgr->GetOption<uint32>     ("PvpBots.DisabledWithoutRealPlayerLogoutDelay", 300);
     _debug            = sConfigMgr->GetOption<bool>       ("PvpBots.Debug",                                false);
-    _gearQualityLimit     = sConfigMgr->GetOption<uint32>     ("PvpBots.GearQualityLimit",       4);
-    _gearScoreLimit       = sConfigMgr->GetOption<uint32>     ("PvpBots.GearScoreLimit",         0);
-    _preferResilienceGear     = sConfigMgr->GetOption<bool>("PvpBots.PreferResilienceGear",   true);
-    _enableCcBreakTrinket     = sConfigMgr->GetOption<bool>("PvpBots.EnableCcBreakTrinket",   true);
-    _enableHeirloomCcTrinket  = sConfigMgr->GetOption<bool>("PvpBots.EnableHeirloomCcTrinket", true);
+    _gearQualityLimit        = sConfigMgr->GetOption<uint32>("PvpBots.GearQualityLimit",       4);
+    _gearScoreLimit          = sConfigMgr->GetOption<uint32>("PvpBots.GearScoreLimit",         0);
+    _pvpResilienceWeight  = sConfigMgr->GetOption<bool>("PvpBots.PreferPvpGear",        true) ? 5.0f : 0.0f;
+    _applyEnchantsAndGems = sConfigMgr->GetOption<bool>("PvpBots.ApplyEnchantsAndGems", true);
+    _enableCcBreakTrinket = sConfigMgr->GetOption<bool>("PvpBots.EnableCcBreakTrinket", true);
+    _allowHeirlooms    = sConfigMgr->GetOption<bool>("PvpBots.AllowHeirlooms",        true);
+    _weaponSpeedWeight = sConfigMgr->GetOption<bool>("PvpBots.WeaponSpeedGovernance", true) ? 2.0f : 0.0f;
+
+    LOG_INFO("playerbots", "[mod-pvpbots] PreferPvpGear = {} (resilienceWeight = {:.1f})",
+        (_pvpResilienceWeight > 0.0f ? "yes" : "no"), _pvpResilienceWeight);
 
     {
         static const uint8  classes[]     = {1, 2, 3, 4, 5, 6, 7, 8, 9, 11};
         static const uint8  checkLevels[] = {40, 60, 65, 70, 75, 80};
-        static const uint32 kMaxSpecNo    = 3; 
+        static const uint32 kMaxSpecNo    = 3;
 
         _pvpSpecs.clear();
 
@@ -531,7 +281,7 @@ void PvpBotMgr::LoadConfig()
                 std::string name = sConfigMgr->GetOption<std::string>(
                     prefix + "Name." + clsSpec, "");
                 if (name.empty())
-                    break; 
+                    break;
 
                 PvpSpec spec;
                 spec.name   = name;
@@ -1150,68 +900,6 @@ const char* PvpBotMgr::GetClassName(uint8 classId)
 }
 
 // ============================================================
-// InitPvpSpec
-//
-// Applies talents, glyphs, and resets strategies.
-// Mirrors the "talents spec <name>" command flow exactly.
-// ============================================================
-void PvpBotMgr::InitPvpSpec(Player* bot, const PvpSpec* selectedSpec, uint8 primaryTab)
-{
-    if (!bot || !selectedSpec)
-        return;
-
-    uint8 level   = bot->GetLevel();
-    uint8 classId = bot->getClass();
-
-    if (selectedSpec->links.empty())
-    {
-        DebugLog("No talent links configured for spec " + selectedSpec->name);
-        return;
-    }
-
-    // Reset once up front — all subsequent applications use reset=false so we
-    // accumulate points across breakpoints, exactly like InitTalentsBySpecNo does.
-    bot->resetTalents(true);
-
-    // Walk every configured breakpoint in ascending level order and apply it.
-    // GetFreeTalentPoints() naturally caps spending — a level 70 bot applies the
-    // .60 link fully, then applies as many steps of the .80 link as points allow.
-    // This mirrors the cumulative behaviour of playerbots' InitTalentsBySpecNo.
-    // All links come from our pvpbots config (selectedSpec->links), never playerbots.
-    bool anyApplied = false;
-    for (const auto& ll : selectedSpec->links)
-    {
-        if (bot->GetFreeTalentPoints() == 0)
-            break;
-
-        std::vector<std::vector<uint32>> parsed =
-            PlayerbotAIConfig::ParseTempTalentsOrder(classId, ll.link);
-
-        if (parsed.empty())
-        {
-            DebugLog("Failed to parse talent link (level " + std::to_string(ll.level) +
-                     ") for spec " + selectedSpec->name);
-            continue;
-        }
-
-        PlayerbotFactory::InitTalentsByParsedSpecLink(bot, parsed, false);
-        anyApplied = true;
-    }
-
-    if (!anyApplied)
-    {
-        DebugLog("No talent links applied for spec " + selectedSpec->name +
-                 " at level " + std::to_string(level));
-        return;
-    }
-
-    // Reset strategies so the AI's role/type reflects the new talent tree.
-    PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
-    if (botAI)
-        botAI->ResetStrategies(false);
-}
-
-// ============================================================
 // CleanupInvalidPets
 //
 // Deletes character_pet rows for every pvpbot whose class cannot have a
@@ -1296,390 +984,6 @@ void PvpBotMgr::CleanupDkStartingArea()
 
     LOG_INFO("playerbots",
         "[mod-pvpbots] Relocated {} Death Knight bot(s) out of Ebon Hold.", count);
-}
-
-// ============================================================
-// BuildPvpItemCache
-//
-// Queries item_template for every item that has resilience rating
-// (stat_type = 35) as one of its ten stat slots.  Results are stored
-// keyed by InventoryType, sorted by ItemLevel descending so that
-// EquipPvpGear() always tries the highest-level qualifying item first.
-//
-// Called once during Initialize().
-// ============================================================
-void PvpBotMgr::BuildPvpItemCache()
-{
-    _pvpItemCache.clear();
-
-    // Fetch every equippable item that has any resilience (stat_type=35).
-    // Scoring is handled at gear-time by StatsWeightCalculator — we only need
-    // the identity and equip-eligibility fields here.
-    QueryResult result = WorldDatabase.Query(
-        "SELECT entry, InventoryType, RequiredLevel, ItemLevel, AllowableClass "
-        "FROM item_template "
-        "WHERE Quality >= 2 "
-        "  AND RequiredLevel > 0 "
-        "  AND InventoryType BETWEEN 1 AND 27 "
-        "  AND InventoryType NOT IN (18, 19) "
-        "  AND (stat_type1=35 OR stat_type2=35 OR stat_type3=35 OR stat_type4=35 "
-        "    OR stat_type5=35 OR stat_type6=35 OR stat_type7=35 OR stat_type8=35 "
-        "    OR stat_type9=35 OR stat_type10=35)"
-    );
-
-    if (!result)
-    {
-        LOG_WARN("playerbots", "[mod-pvpbots] BuildPvpItemCache: no resilience items found.");
-        return;
-    }
-
-    uint32 count = 0;
-    do
-    {
-        Field* fields = result->Fetch();
-
-        PvpItemEntry e;
-        e.itemId         = fields[0].Get<uint32>();
-        e.inventoryType  = fields[1].Get<uint8>();
-        e.requiredLevel  = fields[2].Get<uint8>();
-        e.itemLevel      = fields[3].Get<uint16>();
-        e.allowableClass = fields[4].Get<int32>();
-
-        _pvpItemCache[e.inventoryType].push_back(e);
-        ++count;
-    }
-    while (result->NextRow());
-
-    // Sort each bucket: best item level first.
-    for (auto& kv : _pvpItemCache)
-    {
-        std::sort(kv.second.begin(), kv.second.end(),
-            [](const PvpItemEntry& a, const PvpItemEntry& b)
-            { return a.itemLevel > b.itemLevel; });
-    }
-
-    LOG_INFO("playerbots",
-        "[mod-pvpbots] PvP item cache: {} resilience items across {} inventory types.",
-        count, _pvpItemCache.size());
-
-    // ── CC-break trinket cache ─────────────────────────────────────────────
-    // Spell 42292 is "Removes all movement impairing effects and all effects
-    // which cause loss of control of your character" — the iconic PvP trinket.
-    _ccBreakTrinketCache.clear();
-    {
-        QueryResult r = WorldDatabase.Query(
-            "SELECT entry, InventoryType, RequiredLevel, ItemLevel, AllowableClass "
-            "FROM item_template "
-            "WHERE Quality >= 2 "
-            "  AND InventoryType = 12 "
-            "  AND RequiredLevel > 0 "
-            "  AND (spellid_1 = 42292 OR spellid_2 = 42292 OR spellid_3 = 42292 "
-            "    OR spellid_4 = 42292 OR spellid_5 = 42292)"
-        );
-        if (r) do {
-            Field* f = r->Fetch();
-            PvpItemEntry e;
-            e.itemId         = f[0].Get<uint32>();
-            e.inventoryType  = f[1].Get<uint8>();
-            e.requiredLevel  = f[2].Get<uint8>();
-            e.itemLevel      = f[3].Get<uint16>();
-            e.allowableClass = f[4].Get<int32>();
-            _ccBreakTrinketCache.push_back(e);
-        } while (r->NextRow());
-
-        std::sort(_ccBreakTrinketCache.begin(), _ccBreakTrinketCache.end(),
-            [](const PvpItemEntry& a, const PvpItemEntry& b)
-            { return a.itemLevel > b.itemLevel; });
-
-        LOG_INFO("playerbots", "[mod-pvpbots] CC-break trinket cache: {} items.",
-            _ccBreakTrinketCache.size());
-    }
-
-    // ── All-trinket cache (for TRINKET2 PvE scoring) ──────────────────────
-    _allTrinketCache.clear();
-    {
-        QueryResult r = WorldDatabase.Query(
-            "SELECT entry, InventoryType, RequiredLevel, ItemLevel, AllowableClass "
-            "FROM item_template "
-            "WHERE Quality >= 2 "
-            "  AND InventoryType = 12 "
-            "  AND RequiredLevel > 0"
-        );
-        if (r) do {
-            Field* f = r->Fetch();
-            PvpItemEntry e;
-            e.itemId         = f[0].Get<uint32>();
-            e.inventoryType  = f[1].Get<uint8>();
-            e.requiredLevel  = f[2].Get<uint8>();
-            e.itemLevel      = f[3].Get<uint16>();
-            e.allowableClass = f[4].Get<int32>();
-            _allTrinketCache.push_back(e);
-        } while (r->NextRow());
-
-        std::sort(_allTrinketCache.begin(), _allTrinketCache.end(),
-            [](const PvpItemEntry& a, const PvpItemEntry& b)
-            { return a.itemLevel > b.itemLevel; });
-
-        LOG_INFO("playerbots", "[mod-pvpbots] All-trinket cache: {} items.",
-            _allTrinketCache.size());
-    }
-}
-
-// ============================================================
-// EquipPvpGear
-//
-// Called after InitEquipment() has already geared the bot correctly for its
-// PvP spec.  This pass replaces armor and accessory slots with the best
-// resilience-bearing items from _pvpItemCache.
-//
-// Weapons (MAINHAND, OFFHAND, RANGED) are intentionally left alone —
-// InitEquipment() owns weapons and uses CanEquipWeapon() +
-// CalculateItemTypePenalty() correctly.  Adding a resilience bonus distorts
-// those penalties so we do not touch weapon slots here.
-//
-// When PvpBots.PreferResilienceGear = 1, a fixed bonus per resilience point
-// is added so resilience items edge out otherwise equally scored PvE items.
-//
-// TRINKET1 → highest-level CC-break trinket (spell 42292) the bot qualifies for.
-// TRINKET2 → highest StatsWeightCalculator score across all trinkets (best PvE).
-// ============================================================
-void PvpBotMgr::EquipPvpGear(Player* bot)
-{
-    if (_pvpItemCache.empty())
-        return;
-
-    // Same scorer playerbots uses — auto-detects role from class+spec.
-    StatsWeightCalculator calculator(bot);
-    calculator.SetItemSetBonus(false); // bots mix PvP sets; partial bonuses mislead scoring
-
-    uint8 level    = bot->GetLevel();
-    int32 classMask = static_cast<int32>(bot->getClassMask());
-
-    // Items already placed this pass — prevents double-slots (FINGER1/2) from
-    // receiving the same item.
-    std::set<uint32> usedIds;
-
-    // Scan all invTypes in the 0-terminated array, score every candidate with
-    // StatsWeightCalculator + resilience bonus, equip the winner.
-    auto tryEquip = [&](uint8 equipSlot, const uint8* invTypes) -> bool
-    {
-        float  bestScore = -1.0f;
-        uint32 bestId    = 0;
-        uint16 bestDest  = 0;
-
-        for (int ti = 0; invTypes[ti] != 0; ++ti)
-        {
-            auto cacheIt = _pvpItemCache.find(invTypes[ti]);
-            if (cacheIt == _pvpItemCache.end())
-                continue;
-
-            for (const PvpItemEntry& entry : cacheIt->second)
-            {
-                if (usedIds.count(entry.itemId))               continue;
-                if (entry.requiredLevel > level)               continue;
-                if (entry.allowableClass != -1 &&
-                    !(entry.allowableClass & classMask))       continue;
-
-                uint16 dest;
-                if (bot->CanEquipNewItem(equipSlot, dest, entry.itemId, true) != EQUIP_ERR_OK)
-                    continue;
-
-                float score = calculator.CalculateItem(entry.itemId);
-
-                // Add resilience bonus so items with more resilience rating are
-                // preferred over items that are otherwise equally scored.
-                if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry.itemId))
-                {
-                    for (uint8 j = 0; j < MAX_ITEM_PROTO_STATS; ++j)
-                    {
-                        if (proto->ItemStat[j].ItemStatType == ITEM_MOD_RESILIENCE_RATING &&
-                            proto->ItemStat[j].ItemStatValue > 0)
-                        {
-                            if (_preferResilienceGear)
-                                score += proto->ItemStat[j].ItemStatValue * 2.0f;
-                            break;
-                        }
-                    }
-                }
-
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    bestId    = entry.itemId;
-                    bestDest  = dest;
-                }
-            }
-        }
-
-        if (bestId == 0)
-            return false;
-
-        if (Item* old = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, equipSlot))
-            bot->DestroyItem(INVENTORY_SLOT_BAG_0, equipSlot, true);
-
-        bot->EquipNewItem(bestDest, bestId, true);
-        usedIds.insert(bestId);
-        return true;
-    };
-
-    // ── Armor and accessory slots ────────────────────────────────────────
-    // CanEquipNewItem enforces armor proficiency (cloth/leather/mail/plate).
-    static const uint8 sHead[]      = { INVTYPE_HEAD,      0 };
-    static const uint8 sNeck[]      = { INVTYPE_NECK,      0 };
-    static const uint8 sShoulders[] = { INVTYPE_SHOULDERS, 0 };
-    static const uint8 sChest[]     = { INVTYPE_CHEST, INVTYPE_ROBE, 0 };
-    static const uint8 sWaist[]     = { INVTYPE_WAIST,     0 };
-    static const uint8 sLegs[]      = { INVTYPE_LEGS,      0 };
-    static const uint8 sFeet[]      = { INVTYPE_FEET,      0 };
-    static const uint8 sWrists[]    = { INVTYPE_WRISTS,    0 };
-    static const uint8 sHands[]     = { INVTYPE_HANDS,     0 };
-    static const uint8 sFinger[]    = { INVTYPE_FINGER,    0 };
-    static const uint8 sTrinket[]   = { INVTYPE_TRINKET,   0 };
-    static const uint8 sBack[]      = { INVTYPE_CLOAK,     0 };
-
-    tryEquip(EQUIPMENT_SLOT_HEAD,      sHead);
-    tryEquip(EQUIPMENT_SLOT_NECK,      sNeck);
-    tryEquip(EQUIPMENT_SLOT_SHOULDERS, sShoulders);
-    tryEquip(EQUIPMENT_SLOT_CHEST,     sChest);
-    tryEquip(EQUIPMENT_SLOT_WAIST,     sWaist);
-    tryEquip(EQUIPMENT_SLOT_LEGS,      sLegs);
-    tryEquip(EQUIPMENT_SLOT_FEET,      sFeet);
-    tryEquip(EQUIPMENT_SLOT_WRISTS,    sWrists);
-    tryEquip(EQUIPMENT_SLOT_HANDS,     sHands);
-    tryEquip(EQUIPMENT_SLOT_FINGER1,   sFinger);
-    tryEquip(EQUIPMENT_SLOT_FINGER2,   sFinger);
-
-    // ── Trinket slots ─────────────────────────────────────────────────────
-    // Clear both slots first to eliminate unique-equip category conflicts.
-    for (uint8 s : { (uint8)EQUIPMENT_SLOT_TRINKET1, (uint8)EQUIPMENT_SLOT_TRINKET2 })
-        if (Item* t = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, s))
-            bot->DestroyItem(INVENTORY_SLOT_BAG_0, s, true);
-
-    // TRINKET1: CC-break trinket if enabled, otherwise falls through to PvE scoring.
-    bool trinket1Filled = false;
-    if (_enableCcBreakTrinket)
-    {
-        for (const PvpItemEntry& entry : _ccBreakTrinketCache)
-        {
-            if (entry.requiredLevel > level)                           continue;
-            if (entry.allowableClass != -1 &&
-                !(entry.allowableClass & classMask))                   continue;
-
-            uint16 dest;
-            if (bot->CanEquipNewItem(EQUIPMENT_SLOT_TRINKET1, dest, entry.itemId, false) != EQUIP_ERR_OK)
-                continue;
-
-            bot->EquipNewItem(dest, entry.itemId, true);
-            usedIds.insert(entry.itemId);
-            trinket1Filled = true;
-            break;
-        }
-
-        // Heirloom fallback: faction-appropriate CC-break insignia (no level req).
-        if (!trinket1Filled && _enableHeirloomCcTrinket)
-        {
-            uint32 hId = (bot->GetTeamId() == TEAM_ALLIANCE)
-                ? HEIRLOOM_CC_ALLIANCE : HEIRLOOM_CC_HORDE;
-            uint16 dest;
-            if (bot->CanEquipNewItem(EQUIPMENT_SLOT_TRINKET1, dest, hId, false) == EQUIP_ERR_OK)
-            {
-                bot->EquipNewItem(dest, hId, true);
-                usedIds.insert(hId);
-                trinket1Filled = true;
-            }
-        }
-    }
-
-    // Fill any unfilled trinket slot(s) with the best PvE trinket by spec.
-    // No resilience bonus here — pure StatsWeightCalculator score.
-    auto fillPveTrinket = [&](uint8 slot)
-    {
-        float  bestScore = -1.0f;
-        uint32 bestId    = 0;
-        uint16 bestDest  = 0;
-
-        for (const PvpItemEntry& entry : _allTrinketCache)
-        {
-            if (usedIds.count(entry.itemId))                           continue;
-            if (entry.requiredLevel > level)                           continue;
-            if (entry.allowableClass != -1 &&
-                !(entry.allowableClass & classMask))                   continue;
-
-            uint16 dest;
-            if (bot->CanEquipNewItem(slot, dest, entry.itemId, false) != EQUIP_ERR_OK)
-                continue;
-
-            float score = calculator.CalculateItem(entry.itemId);
-            if (score > bestScore)
-            {
-                bestScore = score;
-                bestId    = entry.itemId;
-                bestDest  = dest;
-            }
-        }
-
-        if (bestId != 0)
-        {
-            bot->EquipNewItem(bestDest, bestId, true);
-            usedIds.insert(bestId);
-        }
-    };
-
-    if (!trinket1Filled)
-        fillPveTrinket(EQUIPMENT_SLOT_TRINKET1);
-    fillPveTrinket(EQUIPMENT_SLOT_TRINKET2);
-
-    tryEquip(EQUIPMENT_SLOT_BACK,      sBack);
-
-    // Weapons (MAINHAND, OFFHAND, RANGED) are intentionally skipped.
-    // InitEquipment() already chose spec-correct weapons using CanEquipWeapon()
-    // and CalculateItemTypePenalty().  Adding a resilience bonus here distorts
-    // those penalties (e.g. a high-resilience 1H can outscore a 2H for an Arms
-    // Warrior), so we leave weapons alone.
-}
-
-// ============================================================
-// EquipCcBreakTrinket
-//
-// Used for bots below level 66 when PvpBots.EnableCcBreakTrinket = 1.
-// Places the highest-level CC-break trinket (spell 42292) into TRINKET1.
-// TRINKET2 is left as Randomize() chose it.
-// ============================================================
-void PvpBotMgr::EquipCcBreakTrinket(Player* bot)
-{
-    uint8  level     = bot->GetLevel();
-    int32  classMask = static_cast<int32>(bot->getClassMask());
-
-    // Clear TRINKET1 only; TRINKET2 keeps Randomize()'s choice.
-    if (Item* t = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_TRINKET1))
-        bot->DestroyItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_TRINKET1, true);
-
-    // Try the regular CC-break trinket cache first (sorted by ilvl desc).
-    bool equipped = false;
-    for (const PvpItemEntry& entry : _ccBreakTrinketCache)
-    {
-        if (entry.requiredLevel > level)                               continue;
-        if (entry.allowableClass != -1 &&
-            !(entry.allowableClass & classMask))                       continue;
-
-        uint16 dest;
-        if (bot->CanEquipNewItem(EQUIPMENT_SLOT_TRINKET1, dest, entry.itemId, false) != EQUIP_ERR_OK)
-            continue;
-
-        bot->EquipNewItem(dest, entry.itemId, true);
-        equipped = true;
-        break;
-    }
-
-    // Fallback: faction-appropriate heirloom (scales from level 1, no level req).
-    if (!equipped && _enableHeirloomCcTrinket)
-    {
-        uint32 hId = (bot->GetTeamId() == TEAM_ALLIANCE)
-            ? HEIRLOOM_CC_ALLIANCE : HEIRLOOM_CC_HORDE;
-        uint16 dest;
-        if (bot->CanEquipNewItem(EQUIPMENT_SLOT_TRINKET1, dest, hId, false) == EQUIP_ERR_OK)
-            bot->EquipNewItem(dest, hId, true);
-    }
 }
 
 // ============================================================

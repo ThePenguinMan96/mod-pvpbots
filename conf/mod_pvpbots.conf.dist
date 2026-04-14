@@ -66,11 +66,17 @@ PvpBots.GearQualityLimit = 4
 # Default: 0 (no limit)
 PvpBots.GearScoreLimit = 0
 
-# Set to 1 to prefer gear with resilience rating over otherwise equal PvE items.
-# Set to 0 if you want bots to use pure StatsWeightCalculator scoring with no
-# preference for resilience.
+# When enabled, gear selection strongly prefers items with resilience rating over
+# equivalent PvE items. Uses a multiplicative score bonus internally (weight 5.0).
+# Set to 0 to use pure StatsWeightCalculator scoring with no resilience preference.
 # Default: 1
-PvpBots.PreferResilienceGear = 1
+PvpBots.PreferPvpGear = 1
+
+# When enabled, enchants and gems are applied to each bot at login.
+# Overrides AiPlayerbot.MinEnchantingBotLevel — pvpbots at any level receive
+# enchants when this is set to 1.
+# Default: 1
+PvpBots.ApplyEnchantsAndGems = 1
 
 # Set to 1 to place the CC-break trinket ("Removes all movement impairing effects
 # and all effects which cause loss of control of your character") in trinket slot 1.
@@ -79,14 +85,39 @@ PvpBots.PreferResilienceGear = 1
 # Default: 1
 PvpBots.EnableCcBreakTrinket = 1
 
-# Set to 1 to equip the faction heirloom CC-break trinket (Inherited Insignia of
-# the Alliance / Horde, items 44098 / 44097) in trinket slot 1 when no
-# level-appropriate CC-break trinket is found in the cache.
-# These heirlooms scale with the bot's level and have no level requirement.
-# Note: if the server enforces account-bound restrictions on heirlooms, the slot
-# will simply remain empty rather than cause an error.
+# Set to 1 to allow heirloom items (quality 7, e.g. Sharpened Scarlet Kris,
+# Upgraded Dwarven Hand Cannon) to compete as gear candidates in all slots.
+# Heirlooms are scored using DBC scaling data (SSD/SSV) so they reflect their
+# true stats at the bot's current level. They naturally win at low levels and
+# lose to endgame epics at 80.
+# Also enables heirloom CC-break trinkets (Inherited Insignia of the Alliance /
+# Horde) as a fallback when no level-appropriate CC-break trinket is found.
 # Default: 1
-PvpBots.EnableHeirloomCcTrinket = 1
+PvpBots.AllowHeirlooms = 1
+
+# When enabled, weapon scoring applies a 3× multiplier to weapons whose attack
+# speed matches the spec ideal for the equipped slot. The multiplier is applied
+# after stat/resilience scoring so the best-statted weapon at the right speed
+# wins — not just any slow weapon.
+#
+#   Slow 2H  (Delay >= 3400 ms): Arms Warrior, Ret Paladin, Blood/Unholy DK,
+#                                 Fury Warrior with Titan's Grip
+#   Slow 1H  (Delay >= 2600 ms): Enhancement Shaman (both slots; matching MH/OH
+#                                 speed also earns a sync bonus — synchronized
+#                                 swings consume one Flurry charge per pair, giving
+#                                 6 boosted attacks instead of 3), Frost DK,
+#                                 Fury Warrior (SMF, both slots),
+#                                 Rogue Combat (mainhand only)
+#   Fast 1H  (Delay <= 1500 ms): Rogue Combat offhand,
+#                                 Rogue Assassination/Subtlety offhand (dagger)
+#   Slow dagger (Delay >= 1700 ms): Rogue Assassination/Subtlety mainhand
+#   Slow ranged (Delay >= 2800 ms): Hunter ranged slot — higher top-end damage
+#                                    amplifies Aimed/Chimera/Explosive Shot.
+#                                    Hunter melee weapons remain pure stat sticks.
+#   Feral Druid: attack speed is normalised in forms — no governance applied.
+#
+# Default: 1
+PvpBots.WeaponSpeedGovernance = 1
 
 ###############################################################################
 # PvP Specs

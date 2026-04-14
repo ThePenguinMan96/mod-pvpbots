@@ -31,6 +31,9 @@
 #include <vector>
 #include <string>
 
+// Forward declaration for DBC type used in private static helper signature.
+struct ScalingStatDistributionEntry;
+
 enum PvpBotState : uint8
 {
     PVPBOT_STATE_IDLE   = 0,
@@ -38,6 +41,7 @@ enum PvpBotState : uint8
     PVPBOT_STATE_DEAD   = 2,
     PVPBOT_STATE_IN_BG  = 3,
 };
+
 
 // Persistent record — loaded from pvpbots_registry and kept in memory.
 // Separate from PlayerbotHolder::playerBots (the live Player* map).
@@ -81,8 +85,8 @@ struct PvpSpec
 };
 
 // A resilience-bearing item loaded from item_template at startup.
-// Used by EquipPvpGear() to replace Randomize()'s PvE gear with PvP equivalents.
-// Scoring is done by StatsWeightCalculator (same as playerbots), not by us.
+// Loaded at startup by BuildPvpItemCache(); used by InitPvpEquipment() for
+// CC-break trinket lookup. Resilience item cache kept for future reference.
 struct PvpItemEntry
 {
     uint32 itemId;
@@ -90,6 +94,7 @@ struct PvpItemEntry
     uint8  requiredLevel;
     uint16 itemLevel;
     int32  allowableClass;  // -1 = unrestricted
+    uint8  quality;         // ITEM_QUALITY_* — used to gate heirloom (7) entries
 };
 
 class PvpBotMgr : public PlayerbotHolder
@@ -140,22 +145,28 @@ private:
     uint32      _gearQualityLimit     = ITEM_QUALITY_EPIC;
     uint32      _gearScoreLimit       = 0;
 
-    // When true, adds a fixed bonus per resilience point on top of
-    // StatsWeightCalculator so that resilience items edge out PvE equivalents.
-    bool        _preferResilienceGear = true;
+    // Multiplicative resilience score weight (set from PvpBots.PreferPvpGear).
+    // 5.0 when enabled; 0.0 when disabled.
+    float       _pvpResilienceWeight  = 5.0f;
+
+    // When true, enchants and gems are always applied regardless of
+    // AiPlayerbot.MinEnchantingBotLevel.
+    bool        _applyEnchantsAndGems = true;
 
     // When true, TRINKET1 is always the highest-level CC-break trinket
     // the bot qualifies for. Applies to all bots regardless of level.
     bool        _enableCcBreakTrinket = true;
 
-    // Heirloom CC-break trinkets used as fallback when no level-appropriate
-    // CC-break trinket exists in _ccBreakTrinketCache.
-    // 44097 = Inherited Insignia of the Horde
-    // 44098 = Inherited Insignia of the Alliance
-    // Set _enableHeirloomCcTrinket = false to disable.
-    bool        _enableHeirloomCcTrinket  = true;
-    static constexpr uint32 HEIRLOOM_CC_ALLIANCE = 44098;
-    static constexpr uint32 HEIRLOOM_CC_HORDE    = 44097;
+    // When true, heirloom items (quality 7) are added as candidates in
+    // InitPvpEquipment and scored via ScoreHeirloom (SSD/SSV DBC scaling).
+    // Also enables heirloom CC-break trinkets in the CC-break cache.
+    bool        _allowHeirlooms = true;
+
+    // Multiplicative bonus applied to weapons of the correct speed for the
+    // bot's spec (e.g. slow 2H for Arms, slow 1H for Enhancement).
+    // score *= (1.0 + _weaponSpeedWeight) when speed matches the spec ideal.
+    // 0.0 = disabled; default 2.0 (3× boost for matching speed).
+    float       _weaponSpeedWeight = 2.0f;
 
     // Ten level brackets populated by LoadConfig().
     std::vector<PvpBotLevelBracket> _levelBrackets;
@@ -176,6 +187,10 @@ private:
     // All Quality >= 2 trinkets, sorted by itemLevel desc.
     // Used to pick the best PvE trinket for TRINKET2 via StatsWeightCalculator.
     std::vector<PvpItemEntry> _allTrinketCache;
+
+    // Heirloom items (quality 7, ScalingStatDistribution > 0), indexed by
+    // InventoryType. Built by BuildHeirloomCache() when _allowHeirlooms = true.
+    std::unordered_map<uint8, std::vector<PvpItemEntry>> _heirloomCache;
 
     // ----------------------------------------------------------------
     // Runtime state
@@ -223,8 +238,20 @@ private:
     void CleanupInvalidPets();
     void CleanupDkStartingArea();
     void BuildPvpItemCache();
-    void EquipPvpGear(Player* bot);
-    void EquipCcBreakTrinket(Player* bot);
+    void BuildHeirloomCache();
+    void InitPvpEquipment(Player* bot);
+
+    // Score a heirloom item for the given bot using SSD/SSV DBC scaling.
+    // Returns a value on the same scale as StatsWeightCalculator::CalculateItem
+    // so heirlooms compete directly with normal candidates.
+    float ScoreHeirloom(Player* bot, uint32 itemId);
+
+    // Per-stat weight for heirloom scoring, keyed to the bot's class.
+    // Mirrors StatsWeightCalculator's GenerateBasicWeights ranges without
+    // needing a full StatsWeightCalculator instance.
+    static float GetHeirloomStatWeight(Player* bot, uint32 statType);
+    static float GetHeirloomDpsWeight(Player* bot, ItemTemplate const* proto);
+
 
     // Full single-pass initialization for a pvpbot.
     // Sets the PvP spec BEFORE calling InitEquipment/ApplyEnchantAndGemsNew/
@@ -240,6 +267,19 @@ private:
     // Apply the PvP spec from config, including talents, glyphs, and strategy reset.
     // Mirrors the "talents spec <name>" command flow exactly.
     void InitPvpSpec(Player* bot, const PvpSpec* selectedSpec, uint8 primaryTab);
+
+    // Weapon-speed governance multiplier for InitPvpEquipment's scoring loop.
+    // Returns (1.0 + weight) when proto's Delay matches the spec-ideal speed for
+    // the given slot; returns 1.0 otherwise (no boost). Only applies to
+    // MAINHAND / OFFHAND weapon items; non-weapons always return 1.0.
+    static float GetWeaponSpeedMultiplier(Player* bot, int32 slot,
+                                          ItemTemplate const* proto, float weight);
+
+    // Safe equip-check helper: mirrors PlayerbotFactory::CanEquipUnseenItem (private).
+    // Uses temp=true so the throw-away Item gets GUID 0xFFFFFFFF and is cleaned up
+    // properly with RemoveFromUpdateQueueOf before deletion — avoids the stale update
+    // queue entries that Player::CanEquipNewItem leaves behind when called in a loop.
+    static bool CanEquipItemTemp(Player* bot, uint8 slot, uint16& dest, uint32 itemId);
 
     static const char* GetRaceName(uint8 race);
     static const char* GetClassName(uint8 classId);

@@ -99,7 +99,7 @@ All three known gear issues (wrong-spec gear, wrong glyphs, wrong-spec enchants)
 - **`_pvpItemCache`:** All items with resilience (stat_type=35) from `item_template`, indexed by `InventoryType`, sorted by `itemLevel` desc. Built once at startup by `BuildPvpItemCache()`.
 - **`_ccBreakTrinketCache`:** Trinkets whose on-use spell is spell 42292 (CC-break / Every Man for Himself equivalent). Sorted by itemLevel desc.
 - **Scoring:** `StatsWeightCalculator::CalculateItem(itemId)` + optional resilience bonus from `_pvpResilienceWeight`. Same scorer playerbots uses — no custom formulas.
-- **Weapons excluded:** `EquipPvpGear` deliberately skips MAINHAND/OFFHAND/RANGED. `InitEquipment()` owns weapon selection via `CanEquipWeapon()` and `CalculateItemTypePenalty()`. Adding a resilience bonus there distorts penalty math (e.g. a high-resilience 1H outscoring a 2H for an Arms Warrior).
+- **Weapons included:** `EquipPvpGear` now covers MAINHAND/OFFHAND/RANGED alongside all armor slots. `CanEquipNewItem` enforces proficiency/dual-wield rules; `StatsWeightCalculator` penalises wrong weapon types so the spec-correct PvP weapon wins naturally.
 - **TRINKET1:** Always the best CC-break trinket the bot qualifies for (level check), or the heirloom fallback if none found.
 - **TRINKET2:** Left as `Randomize()` chose it (scored by `_allTrinketCache` via `StatsWeightCalculator`).
 - **Heirloom fallback:** Item 44098 (Alliance) / 44097 (Horde) — scale with level, no level req. Controlled by `PvpBots.EnableHeirloomCcTrinket`.
@@ -110,7 +110,7 @@ All three known gear issues (wrong-spec gear, wrong glyphs, wrong-spec enchants)
 
 - **Do NOT touch `mod-playerbots`.** All our work stays in `mod-pvpbots`. Use only public interfaces from playerbots.
 - **PvP specs stay in the pvpbots config**, not the playerbots config. Specs are parsed from talent link strings in `mod_pvpbots.conf.dist`.
-- **Do not add resilience score bonuses to weapon slots.** Let `CalculateItemTypePenalty()` do its job.
+- **Weapons are handled by `EquipPvpGear` like any other slot.** `StatsWeightCalculator` + `CanEquipNewItem` handle proficiency and type penalties naturally.
 - **Always use async `CharacterDatabase.Execute()`** for our DB writes that must queue after Randomize's writes. Never `DirectExecute` for these.
 - Do not use crude statFlavor/GetRoleFlavor filtering — `StatsWeightCalculator` already handles all per-spec scoring correctly.
 
